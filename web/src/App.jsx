@@ -290,7 +290,20 @@ export default function App() {
           <div className="section-h">
             Layers
             <span className="section-actions">
-              <button className="btn ghost" disabled={locked} onClick={() => run(() => api.addLayer({ name: `Layer ${project.layers.length + 1}` }))}>
+              <button
+                className="btn ghost"
+                disabled={locked}
+                onClick={() =>
+                  run(async () => {
+                    const result = await api.addLayer({ name: `Layer ${project.layers.length + 1}` });
+                    if (result.layer?.id) {
+                      setSelectedLayer(result.layer.id);
+                      setTab("layer");
+                    }
+                    return result;
+                  })
+                }
+              >
                 Add layer
               </button>
               <button
