@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { connectSocket } from "./api.js";
 
+function wantFullscreen() {
+  return new URLSearchParams(window.location.search).has("fs");
+}
+
 export default function Output({ controllerId }) {
   const [project, setProject] = useState(null);
   const [clock, setClock] = useState({ playing: false, mediaTime: 0, loop: true });
+  const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
   const videos = useRef(new Map());
   const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight });
 
@@ -17,10 +22,28 @@ export default function Output({ controllerId }) {
       if (msg.type === "clock") setClock(msg.payload);
     });
     const onResize = () => setSize({ w: window.innerWidth, h: window.innerHeight });
+    const enterFs = () => {
+      if (document.fullscreenElement) return;
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    };
+    const onKey = (event) => {
+      if (event.key === "f" || event.key === "F") {
+        if (document.fullscreenElement) document.exitFullscreen?.();
+        else enterFs();
+      }
+    };
+    const onFs = () => setFullscreen(Boolean(document.fullscreenElement));
     window.addEventListener("resize", onResize);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("click", enterFs);
+    document.addEventListener("fullscreenchange", onFs);
+    if (wantFullscreen()) enterFs();
     return () => {
       ws.close();
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("click", enterFs);
+      document.removeEventListener("fullscreenchange", onFs);
     };
   }, []);
 
@@ -56,7 +79,7 @@ export default function Output({ controllerId }) {
   if (!controller) {
     return (
       <div className="output-root">
-        Unknown display. Open this window from Open displays on the production desk.
+        Unknown display. Open this window from Place on outputs on the production desk.
       </div>
     );
   }
@@ -101,7 +124,11 @@ export default function Output({ controllerId }) {
           );
         })}
       </div>
-      <div className="output-tag">{controller.name}</div>
+      {fullscreen ? null : (
+        <div className="output-tag">
+          {controller.name} · F fullscreen · click the picture
+        </div>
+      )}
     </div>
   );
 }

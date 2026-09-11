@@ -8,6 +8,9 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 5173,
+    headers: {
+      "Permissions-Policy": "fullscreen=(self), window-management=(self)",
+    },
     proxy: {
       "/api": "http://127.0.0.1:8787",
       "/media": "http://127.0.0.1:8787",
