@@ -706,7 +706,7 @@ function CanvasBoard({
     `contrast(${project.color?.contrast || 100}%)`,
     `saturate(${project.color?.saturation || 100}%)`,
     `hue-rotate(${project.color?.hue || 0}deg)`,
-    project.eyeSaver ? "sepia(0.25) brightness(0.82)" : "",
+    project.eyeSaver ? "sepia(0.18) brightness(0.96)" : "",
   ].join(" ");
 
   function toCanvas(event) {
