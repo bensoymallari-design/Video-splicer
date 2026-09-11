@@ -289,9 +289,18 @@ export default function App() {
         <div className="dock-col">
           <div className="section-h">
             Layers
-            <button className="btn ghost" disabled={locked} onClick={() => run(() => api.addLayer({ name: `Layer ${project.layers.length + 1}` }))}>
-              Add layer
-            </button>
+            <span className="section-actions">
+              <button className="btn ghost" disabled={locked} onClick={() => run(() => api.addLayer({ name: `Layer ${project.layers.length + 1}` }))}>
+                Add layer
+              </button>
+              <button
+                className="btn danger"
+                disabled={locked || !selectedLayer}
+                onClick={() => selectedLayer && deleteLayer(selectedLayer)}
+              >
+                Delete layer
+              </button>
+            </span>
           </div>
           <div className="chips">
             {project.layers.map((item) => (
@@ -315,7 +324,7 @@ export default function App() {
                   disabled={locked}
                   onClick={() => deleteLayer(item.id)}
                 >
-                  ×
+                  Delete
                 </button>
               </div>
             ))}
@@ -575,7 +584,14 @@ function SenderPane({ project, selected, busy, locked, onCommand, onProbe, onRem
 }
 
 function LayerPane({ project, layer, locked, onPatchLayer, onDeleteLayer }) {
-  if (!layer) return <p className="note">Select a layer to set source, size, z-order, and visibility. Take pushes those sources onto overlapping MCTRL4K units.</p>;
+  if (!layer) {
+    return (
+      <p className="note">
+        Click a layer chip at the bottom, then use <b>Delete layer</b> next to Add layer,
+        or the red Delete on that chip. If Lock is on in the top bar, removal is blocked.
+      </p>
+    );
+  }
   return (
     <>
       <div className="section-h">{layer.name}</div>
