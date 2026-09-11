@@ -41,6 +41,8 @@ export const api = {
   showPlay: () => json("POST", "/api/show/play"),
   showPause: () => json("POST", "/api/show/pause"),
   showStop: () => json("POST", "/api/show/stop"),
+  showSeek: (seconds) => json("POST", "/api/show/seek", { seconds }),
+  patchClip: (id, payload) => json("PATCH", `/api/clips/${id}`, payload),
   async uploadMedia(file) {
     const body = new FormData();
     body.append("file", file);
