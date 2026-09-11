@@ -93,6 +93,14 @@ export default function App() {
     }
   }
 
+  async function deleteLayer(id) {
+    await run(async () => {
+      const result = await api.removeLayer(id);
+      setSelectedLayer((current) => (current === id ? null : current));
+      return result;
+    }, "Layer removed");
+  }
+
   async function startLab(count) {
     const result = await run(() => api.startLab(count), `Lab started with ${count} MCTRL4K simulators`);
     if (result?.controllers?.[0]) setSelectedId(result.controllers[0].id);
@@ -262,14 +270,7 @@ export default function App() {
           onPatch={(payload) => selected && run(() => api.patchController(selected.id, payload))}
           onPatchLayer={(payload) => layer && run(() => api.patchLayer(layer.id, payload))}
           onSettings={(payload) => run(() => api.settings(payload))}
-          onDeleteLayer={() =>
-            layer &&
-            run(async () => {
-              const result = await api.removeLayer(layer.id);
-              setSelectedLayer(null);
-              return result;
-            }, "Layer removed")
-          }
+          onDeleteLayer={() => layer && deleteLayer(layer.id)}
           onImport={importFile}
           onPreviewBrightness={(value) => {
             setProject((current) => ({
@@ -294,17 +295,31 @@ export default function App() {
           </div>
           <div className="chips">
             {project.layers.map((item) => (
-              <button
+              <div
                 key={item.id}
-                className="chip"
-                onClick={() => { setSelectedLayer(item.id); setTab("layer"); }}
-                style={{ outline: selectedLayer === item.id ? "1px solid var(--violet)" : undefined, opacity: item.visible === false ? 0.45 : 1 }}
+                className={`chip layer-chip ${selectedLayer === item.id ? "on" : ""}`}
+                style={{ opacity: item.visible === false ? 0.45 : 1 }}
               >
-                <b>{item.name}</b>
-                <span>{item.width}×{item.height} · {sourceLabel(project, item.source)}</span>
-              </button>
+                <button
+                  type="button"
+                  className="chip-main"
+                  onClick={() => { setSelectedLayer(item.id); setTab("layer"); }}
+                >
+                  <b>{item.name}</b>
+                  <span>{item.width}×{item.height} · {sourceLabel(project, item.source)}</span>
+                </button>
+                <button
+                  type="button"
+                  className="chip-del"
+                  title="Remove layer"
+                  disabled={locked}
+                  onClick={() => deleteLayer(item.id)}
+                >
+                  ×
+                </button>
+              </div>
             ))}
-            {!project.layers.length ? <span className="empty">No layers yet.</span> : null}
+            {!project.layers.length ? <span className="empty">No layers yet. Layers are control routing only — they do not carry Resolume video.</span> : null}
           </div>
         </div>
         <div className="dock-col">
@@ -595,7 +610,10 @@ function LayerPane({ project, layer, locked, onPatchLayer, onDeleteLayer }) {
           Delete
         </button>
       </div>
-      <p className="note">{layer.width}×{layer.height} at {layer.x},{layer.y} · z {layer.z}</p>
+      <p className="note">
+        {layer.width}×{layer.height} at {layer.x},{layer.y} · z {layer.z}.
+        Use × on the layer chip below, or Delete here. Screen Lock blocks removal.
+      </p>
     </>
   );
 }
