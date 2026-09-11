@@ -31,10 +31,15 @@ function displayLabel(controller) {
   return "LIVE";
 }
 
+function sourceLabel(project, key) {
+  return project.sources?.find((item) => item.key === key)?.label || key;
+}
+
 export default function App() {
   const [project, setProject] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [selectedLayer, setSelectedLayer] = useState(null);
+  const [tab, setTab] = useState("sender");
   const [modal, setModal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
@@ -62,7 +67,16 @@ export default function App() {
     }
   }, [project, selectedId]);
 
+  useEffect(() => {
+    if (!project?.playlist?.running) return undefined;
+    const timer = setInterval(() => {
+      api.playlistNext().then((result) => result.project && setProject(result.project)).catch(() => {});
+    }, (project.playlist.intervalSec || 8) * 1000);
+    return () => clearInterval(timer);
+  }, [project?.playlist?.running, project?.playlist?.intervalSec]);
+
   const selected = project?.controllers.find((c) => c.id === selectedId) || null;
+  const layer = project?.layers.find((item) => item.id === selectedLayer) || null;
 
   async function run(fn, success) {
     setBusy(true);
@@ -84,12 +98,26 @@ export default function App() {
     if (result?.controllers?.[0]) setSelectedId(result.controllers[0].id);
   }
 
+  function importFile(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        run(() => api.importProject(JSON.parse(reader.result)), "Project imported");
+      } catch (err) {
+        setToast(err.message);
+      }
+    };
+    reader.readAsText(file);
+  }
+
   if (!project) {
     return <div className="empty">Starting control desk…</div>;
   }
 
+  const locked = project.locked;
+
   return (
-    <div className="app">
+    <div className={`app ${locked ? "is-locked" : ""} ${project.eyeSaver ? "eye-saver" : ""}`}>
       <header className="topbar">
         <div className="brand">
           <svg className="logo" viewBox="0 0 34 34" aria-hidden="true">
@@ -100,15 +128,16 @@ export default function App() {
           </svg>
           <div>
             <h1>Lumen Splice</h1>
-            <small>IP controller desk</small>
+            <small>{project.name}</small>
           </div>
         </div>
         <div className="master">
-          <label>Master brightness</label>
+          <label>Master</label>
           <input
             type="range"
             min="0"
             max="100"
+            disabled={locked}
             value={project.masterBrightness}
             onChange={(e) =>
               setProject({ ...project, masterBrightness: Number(e.target.value) })
@@ -119,17 +148,23 @@ export default function App() {
           <span className="pct">{project.masterBrightness}%</span>
         </div>
         <div className="actions">
-          <button className="btn" disabled={busy} onClick={() => run(() => api.group({ command: { type: "normal" } }), "All outputs live")}>
+          <button className="btn primary" disabled={busy || locked} onClick={() => run(() => api.take(), "Take sent to senders")}>
+            Take
+          </button>
+          <button className="btn" disabled={busy || locked} onClick={() => run(() => api.group({ command: { type: "normal" } }), "Live")}>
             Live
           </button>
-          <button className="btn" disabled={busy} onClick={() => run(() => api.group({ command: { type: "freeze" } }), "All frozen")}>
+          <button className="btn" disabled={busy || locked} onClick={() => run(() => api.group({ command: { type: "freeze" } }))}>
             Freeze
           </button>
-          <button className="btn danger" disabled={busy} onClick={() => run(() => api.group({ command: { type: "blackout" } }), "All black")}>
-            Blackout
+          <button className="btn danger" disabled={busy || locked} onClick={() => run(() => api.ftb({ active: true }), "FTB")}>
+            FTB
+          </button>
+          <button className="btn" disabled={busy} onClick={() => run(() => api.settings({ locked: !locked }))}>
+            {locked ? "Unlock" : "Lock"}
           </button>
           <button className="btn primary" disabled={busy} onClick={() => startLab(4)}>
-            Lab 4× MCTRL4K
+            Lab 4×
           </button>
         </div>
       </header>
@@ -141,7 +176,7 @@ export default function App() {
             <span>{project.controllers.length}</span>
           </div>
           <div className="row">
-            <button className="btn primary" onClick={() => setModal(true)}>Add by IP</button>
+            <button className="btn primary" disabled={locked} onClick={() => setModal(true)}>Add by IP</button>
             <button className="btn" disabled={busy} onClick={() => startLab(6)}>Lab 6</button>
             {project.lab?.running ? (
               <button className="btn danger" onClick={() => run(() => api.stopLab(), "Lab stopped")}>Stop lab</button>
@@ -149,8 +184,7 @@ export default function App() {
           </div>
           {!project.controllers.length ? (
             <div className="empty">
-              Add real MCTRL4K units by IP, or start a local lab of simulated controllers.
-              Video still enters each sender over HDMI/DP; this desk is the H9-style control plane.
+              Add MCTRL4K units by IP, or start a local lab. Take applies layer sources to overlapping senders over IP.
             </div>
           ) : (
             <div className="card-list">
@@ -158,7 +192,7 @@ export default function App() {
                 <article
                   key={controller.id}
                   className={`device ${selectedId === controller.id ? "selected" : ""}`}
-                  onClick={() => setSelectedId(controller.id)}
+                  onClick={() => { setSelectedId(controller.id); setTab("sender"); }}
                 >
                   <div className="device-top">
                     <h3>
@@ -169,9 +203,9 @@ export default function App() {
                   </div>
                   <div className="ip">{controller.host}:{controller.port}</div>
                   <div className="meta">
-                    <span>{controller.model}</span>
-                    <span>{controller.inputKey}</span>
+                    <span>{sourceLabel(project, controller.inputKey)}</span>
                     <span>{Math.round((controller.brightness / 255) * 100)}%</span>
+                    {controller.backupId ? <span>BKP</span> : null}
                     {controller.simulated ? <span>SIM</span> : null}
                   </div>
                 </article>
@@ -183,26 +217,39 @@ export default function App() {
         <CanvasBoard
           project={project}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          selectedLayer={selectedLayer}
+          onSelect={(id) => { setSelectedId(id); setTab("sender"); }}
+          onSelectLayer={(id) => { setSelectedLayer(id); setTab("layer"); }}
           onMove={(id, viewport) => {
-            const next = {
+            setProject({
               ...project,
               controllers: project.controllers.map((c) =>
                 c.id === id ? { ...c, viewport } : c,
               ),
-            };
-            setProject(next);
+            });
           }}
           onMoveEnd={(id, viewport) => run(() => api.patchController(id, { viewport }))}
+          onMoveLayer={(id, box) => {
+            setProject({
+              ...project,
+              layers: project.layers.map((item) => (item.id === id ? { ...item, ...box } : item)),
+            });
+          }}
+          onMoveLayerEnd={(id, box) => run(() => api.patchLayer(id, box))}
         />
 
         <Inspector
+          tab={tab}
+          setTab={setTab}
           project={project}
           selected={selected}
+          layer={layer}
           busy={busy}
+          locked={locked}
           onCommand={(type, extra) =>
             selected && run(() => api.command(selected.id, { type, ...extra }))
           }
+          onRoute={(id, inputKey) => run(() => api.command(id, { type: "input", inputKey }))}
           onProbe={() => selected && run(() => api.probe(selected.id))}
           onRemove={() =>
             selected &&
@@ -212,6 +259,18 @@ export default function App() {
               return result;
             }, "Controller removed")
           }
+          onPatch={(payload) => selected && run(() => api.patchController(selected.id, payload))}
+          onPatchLayer={(payload) => layer && run(() => api.patchLayer(layer.id, payload))}
+          onSettings={(payload) => run(() => api.settings(payload))}
+          onDeleteLayer={() =>
+            layer &&
+            run(async () => {
+              const result = await api.removeLayer(layer.id);
+              setSelectedLayer(null);
+              return result;
+            }, "Layer removed")
+          }
+          onImport={importFile}
           onPreviewBrightness={(value) => {
             setProject((current) => ({
               ...current,
@@ -229,20 +288,20 @@ export default function App() {
         <div className="dock-col">
           <div className="section-h">
             Layers
-            <button className="btn ghost" onClick={() => run(() => api.addLayer({ name: `Layer ${project.layers.length + 1}` }))}>
+            <button className="btn ghost" disabled={locked} onClick={() => run(() => api.addLayer({ name: `Layer ${project.layers.length + 1}` }))}>
               Add layer
             </button>
           </div>
           <div className="chips">
-            {project.layers.map((layer) => (
+            {project.layers.map((item) => (
               <button
-                key={layer.id}
+                key={item.id}
                 className="chip"
-                onClick={() => setSelectedLayer(layer.id)}
-                style={{ outline: selectedLayer === layer.id ? "1px solid var(--violet)" : undefined }}
+                onClick={() => { setSelectedLayer(item.id); setTab("layer"); }}
+                style={{ outline: selectedLayer === item.id ? "1px solid var(--violet)" : undefined, opacity: item.visible === false ? 0.45 : 1 }}
               >
-                <b>{layer.name}</b>
-                <span>{layer.width}×{layer.height} · {layer.source}</span>
+                <b>{item.name}</b>
+                <span>{item.width}×{item.height} · {sourceLabel(project, item.source)}</span>
               </button>
             ))}
             {!project.layers.length ? <span className="empty">No layers yet.</span> : null}
@@ -250,24 +309,37 @@ export default function App() {
         </div>
         <div className="dock-col">
           <div className="section-h">
-            Presets / layout
-            <button className="btn ghost" onClick={() => run(() => api.addPreset(`Look ${project.presets.length + 1}`), "Preset saved")}>
-              Save look
-            </button>
+            Looks / playlist
+            <span>
+              <button className="btn ghost" disabled={locked} onClick={() => run(() => api.addPreset(`Look ${project.presets.length + 1}`), "Look saved")}>
+                Save look
+              </button>
+              <button className="btn ghost" disabled={locked || !project.presets.length} onClick={() => run(() => api.playlistAdd({}), "Added to playlist")}>
+                + Playlist
+              </button>
+            </span>
           </div>
           <div className="chips">
             {LAYOUTS.map((layout) => (
-              <button key={layout.id} className="chip" onClick={() => run(() => api.layout({ pattern: layout.id }))}>
+              <button key={layout.id} className="chip" disabled={locked} onClick={() => run(() => api.layout({ pattern: layout.id }))}>
                 <b>{layout.label}</b>
                 <span>Tile senders</span>
               </button>
             ))}
             {project.presets.map((preset) => (
-              <button key={preset.id} className="chip" onClick={() => run(() => api.applyPreset(preset.id), `Loaded ${preset.name}`)}>
+              <button key={preset.id} className="chip" disabled={locked} onClick={() => run(() => api.applyPreset(preset.id), `Loaded ${preset.name}`)}>
                 <b>{preset.name}</b>
                 <span>Recall</span>
               </button>
             ))}
+            <button
+              className="chip"
+              disabled={locked || !project.playlist.ids.length}
+              onClick={() => run(() => api.settings({ playlist: { running: !project.playlist.running } }))}
+            >
+              <b>{project.playlist.running ? "Stop playlist" : "Play playlist"}</b>
+              <span>{project.playlist.ids.length} looks · {project.playlist.intervalSec}s</span>
+            </button>
           </div>
         </div>
       </footer>
@@ -311,7 +383,7 @@ export default function App() {
             <div className="field">
               <label>Transport</label>
               <select value={form.transport} onChange={(e) => setForm({ ...form, transport: e.target.value })}>
-                <option value="tcp">TCP 5200 (NovaStar central control)</option>
+                <option value="tcp">TCP 5200</option>
                 <option value="udp">UDP 5201</option>
               </select>
             </div>
@@ -330,35 +402,60 @@ export default function App() {
   );
 }
 
-function Inspector({ project, selected, busy, onCommand, onProbe, onRemove, onPreviewBrightness }) {
+function Inspector({
+  tab, setTab, project, selected, layer, busy, locked,
+  onCommand, onProbe, onRemove, onPatch, onPatchLayer, onSettings, onDeleteLayer, onImport, onPreviewBrightness, onRoute,
+}) {
+  return (
+    <aside className="inspector">
+      <div className="tabs">
+        {["sender", "layer", "matrix", "screen"].map((id) => (
+          <button key={id} className={`tab ${tab === id ? "on" : ""}`} onClick={() => setTab(id)}>
+            {id}
+          </button>
+        ))}
+      </div>
+      {tab === "sender" ? (
+        <SenderPane
+          project={project}
+          selected={selected}
+          busy={busy}
+          locked={locked}
+          onCommand={onCommand}
+          onProbe={onProbe}
+          onRemove={onRemove}
+          onPatch={onPatch}
+          onPreviewBrightness={onPreviewBrightness}
+        />
+      ) : null}
+      {tab === "layer" ? (
+        <LayerPane project={project} layer={layer} locked={locked} onPatchLayer={onPatchLayer} onDeleteLayer={onDeleteLayer} />
+      ) : null}
+      {tab === "matrix" ? (
+        <MatrixPane project={project} locked={locked} onRoute={onRoute} />
+      ) : null}
+      {tab === "screen" ? (
+        <ScreenPane project={project} locked={locked} onSettings={onSettings} onImport={onImport} />
+      ) : null}
+    </aside>
+  );
+}
+
+function SenderPane({ project, selected, busy, locked, onCommand, onProbe, onRemove, onPatch, onPreviewBrightness }) {
   if (!selected) {
-    return (
-      <aside className="inspector">
-        <div className="section-h">Inspector</div>
-        <p className="note">
-          Lumen Splice talks to NovaStar senders over IP using the published central-control protocol
-          (TCP 5200 / UDP 5201). It can drive 2–6+ MCTRL4K units from a laptop, including brightness,
-          freeze, blackout, input routing, and canvas tiling.
-        </p>
-        <p className="note">
-          It does not replace the H9 FPGA video processor. Each MCTRL4K still needs an HDMI/DP/DVI
-          picture. Use this desk instead of the H9 when the laptop (or a GPU/matrix) is the video
-          source and you only need unified IP control.
-        </p>
-      </aside>
-    );
+    return <p className="note">Select a sender. IP control covers brightness, freeze, FTB, input, presets, and tiling — not H9 FPGA splicing.</p>;
   }
   const warning = capacityWarning(selected, project.models);
   const spec = project.models?.[selected.model];
+  const ports = spec?.ethernetPorts || 16;
   return (
-    <aside className="inspector">
+    <>
       <div className="section-h">{selected.name}</div>
       <div className="field">
         <label>Status</label>
         <div>
           <span className={`led ${selected.online ? "on" : "off"}`} />
           {selected.online ? "Online" : "Offline"} {selected.simulated ? "· simulator" : ""}
-          {selected.lastError ? ` · ${selected.lastError}` : ""}
         </div>
       </div>
       <div className="field">
@@ -367,55 +464,219 @@ function Inspector({ project, selected, busy, onCommand, onProbe, onRemove, onPr
           type="range"
           min="0"
           max="100"
+          disabled={locked}
           value={Math.round((selected.brightness / 255) * 100)}
           onChange={(e) => onPreviewBrightness(Number(e.target.value))}
           onMouseUp={(e) => onCommand("brightness", { value: Number(e.target.value) })}
-          onTouchEnd={(e) => onCommand("brightness", { value: Number(e.target.value) })}
         />
       </div>
       <div className="field">
         <label>Input</label>
-        <select value={selected.inputKey} onChange={(e) => onCommand("input", { inputKey: e.target.value })}>
-          {Object.entries(project.inputs || {}).map(([key, value]) => (
-            <option key={key} value={key}>{value.label}</option>
+        <select disabled={locked} value={selected.inputKey} onChange={(e) => onCommand("input", { inputKey: e.target.value })}>
+          {(project.sources || []).map((source) => (
+            <option key={source.key} value={source.key}>{source.label}</option>
           ))}
         </select>
       </div>
       <div className="row">
-        <button className="btn" disabled={busy} onClick={() => onCommand("normal")}>Live</button>
-        <button className="btn" disabled={busy} onClick={() => onCommand("freeze")}>Freeze</button>
-        <button className="btn danger" disabled={busy} onClick={() => onCommand("blackout")}>Black</button>
+        <button className="btn" disabled={busy || locked} onClick={() => onCommand("normal")}>Live</button>
+        <button className="btn" disabled={busy || locked} onClick={() => onCommand("freeze")}>Freeze</button>
+        <button className="btn danger" disabled={busy || locked} onClick={() => onCommand("blackout")}>Black</button>
+      </div>
+      <div className="field">
+        <label>Hardware preset</label>
+        <div className="preset-grid">
+          {Array.from({ length: 8 }, (_, i) => i + 1).map((n) => (
+            <button
+              key={n}
+              className={`btn ${selected.hardwarePreset === n ? "primary" : ""}`}
+              disabled={busy || locked}
+              onClick={() => onCommand("hardwarePreset", { index: n })}
+            >
+              P{n}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="row">
-        <button className="btn" disabled={busy} onClick={() => onCommand("lowLatency", { on: !selected.lowLatency })}>
+        <button className="btn" disabled={busy || locked} onClick={() => onCommand("lowLatency", { on: !selected.lowLatency })}>
           Low latency {selected.lowLatency ? "on" : "off"}
         </button>
-        <button className="btn" disabled={busy} onClick={() => onCommand("mode3d", { on: !selected.mode3d })}>
+        <button className="btn" disabled={busy || locked} onClick={() => onCommand("mode3d", { on: !selected.mode3d })}>
           3D {selected.mode3d ? "on" : "off"}
+        </button>
+        <button className="btn" disabled={busy || locked} onClick={() => onCommand("testPattern", { on: !selected.testPattern })}>
+          Test {selected.testPattern ? "on" : "off"}
         </button>
       </div>
       <div className="field">
-        <label>Viewport (canvas pixels)</label>
-        <div className="ip">
-          {selected.viewport.x},{selected.viewport.y} {selected.viewport.width}×{selected.viewport.height}
-          <br />
-          {pixels(selected).toLocaleString()} px
-          {spec ? ` / ${spec.maxPixels.toLocaleString()} max` : ""}
+        <label>EDID / viewport</label>
+        <div className="edid-row">
+          <input
+            type="number"
+            disabled={locked}
+            defaultValue={selected.edid?.width || selected.viewport.width}
+            key={`${selected.id}-w-${selected.edid?.width || selected.viewport.width}`}
+            onBlur={(e) => onPatch({ edid: { width: Number(e.target.value), height: selected.edid?.height || selected.viewport.height, refresh: 60 } })}
+          />
+          ×
+          <input
+            type="number"
+            disabled={locked}
+            defaultValue={selected.edid?.height || selected.viewport.height}
+            key={`${selected.id}-h-${selected.edid?.height || selected.viewport.height}`}
+            onBlur={(e) => onPatch({ edid: { width: selected.edid?.width || selected.viewport.width, height: Number(e.target.value), refresh: 60 } })}
+          />
+        </div>
+      </div>
+      <div className="field">
+        <label>Backup sender</label>
+        <select
+          disabled={locked}
+          value={selected.backupId || ""}
+          onChange={(e) => onPatch({ backupId: e.target.value || null })}
+        >
+          <option value="">None</option>
+          {project.controllers.filter((c) => c.id !== selected.id).map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label>Ethernet ports</label>
+        <div className="ports">
+          {Array.from({ length: ports }, (_, i) => (
+            <span key={i} className={`port ${i < (selected.portsUp || ports) ? "up" : ""}`} title={`Port ${i + 1}`} />
+          ))}
         </div>
       </div>
       {warning ? <div className="warn-box">{warning}</div> : null}
       <div className="row">
         <button className="btn" onClick={onProbe}>Probe IP</button>
-        <button className="btn danger" onClick={onRemove}>Remove</button>
+        <button className="btn danger" disabled={locked} onClick={onRemove}>Remove</button>
       </div>
-      <p className="note">
-        Ethernet {spec?.ethernetPorts || 16} · Optical {spec?.opticalPorts || 4} · default port 5200
-      </p>
-    </aside>
+    </>
   );
 }
 
-function CanvasBoard({ project, selectedId, onSelect, onMove, onMoveEnd }) {
+function LayerPane({ project, layer, locked, onPatchLayer, onDeleteLayer }) {
+  if (!layer) return <p className="note">Select a layer to set source, size, z-order, and visibility. Take pushes those sources onto overlapping MCTRL4K units.</p>;
+  return (
+    <>
+      <div className="section-h">{layer.name}</div>
+      <div className="field">
+        <label>Name</label>
+        <input disabled={locked} defaultValue={layer.name} key={layer.id + layer.name} onBlur={(e) => onPatchLayer({ name: e.target.value })} />
+      </div>
+      <div className="field">
+        <label>Source</label>
+        <select disabled={locked} value={layer.source} onChange={(e) => onPatchLayer({ source: e.target.value })}>
+          {(project.sources || []).map((source) => (
+            <option key={source.key} value={source.key}>{source.label}</option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label>Kind</label>
+        <select disabled={locked} value={layer.kind || "video"} onChange={(e) => onPatchLayer({ kind: e.target.value })}>
+          <option value="video">Video layer</option>
+          <option value="bkg">BKG (does not steal z-order)</option>
+          <option value="osd">OSD</option>
+        </select>
+      </div>
+      <div className="row">
+        <button className="btn" disabled={locked} onClick={() => onPatchLayer({ visible: layer.visible === false })}>
+          {layer.visible === false ? "Show" : "Hide"}
+        </button>
+        <button className="btn" disabled={locked} onClick={() => onPatchLayer({ locked: !layer.locked })}>
+          {layer.locked ? "Unlock layer" : "Lock layer"}
+        </button>
+        <button className="btn danger" disabled={locked} onClick={onDeleteLayer}>
+          Delete
+        </button>
+      </div>
+      <p className="note">{layer.width}×{layer.height} at {layer.x},{layer.y} · z {layer.z}</p>
+    </>
+  );
+}
+
+function MatrixPane({ project, locked, onRoute }) {
+  const sources = project.sources || [];
+  return (
+    <>
+      <div className="section-h">Input matrix</div>
+      <p className="note">Click a cell to route that source to a sender. This is IP switching, not an H9 crosspoint card.</p>
+      <div className="matrix">
+        <div className="matrix-row head">
+          <span />
+          {sources.map((source) => <span key={source.key}>{source.label}</span>)}
+        </div>
+        {project.controllers.map((controller) => (
+          <div className="matrix-row" key={controller.id}>
+            <span>{controller.name}</span>
+            {sources.map((source) => (
+              <button
+                key={source.key}
+                disabled={locked}
+                className={controller.inputKey === source.key ? "on" : ""}
+                onClick={() => onRoute(controller.id, source.key)}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ScreenPane({ project, locked, onSettings, onImport }) {
+  const color = project.color || {};
+  const osd = project.osd || {};
+  return (
+    <>
+      <div className="section-h">Screen</div>
+      <div className="row">
+        <button className="btn" disabled={locked} onClick={() => onSettings({ eyeSaver: !project.eyeSaver })}>
+          Eye saver {project.eyeSaver ? "on" : "off"}
+        </button>
+        <button className="btn" disabled={locked} onClick={() => onSettings({ osd: { enabled: !osd.enabled } })}>
+          OSD {osd.enabled ? "on" : "off"}
+        </button>
+      </div>
+      <div className="field">
+        <label>OSD text</label>
+        <input disabled={locked} defaultValue={osd.text} key={osd.text} onBlur={(e) => onSettings({ osd: { text: e.target.value, enabled: true } })} />
+      </div>
+      <div className="field">
+        <label>Contrast {color.contrast}</label>
+        <input type="range" min="50" max="150" disabled={locked} defaultValue={color.contrast} key={`c${color.contrast}`} onMouseUp={(e) => onSettings({ color: { contrast: Number(e.target.value) } })} />
+      </div>
+      <div className="field">
+        <label>Saturation {color.saturation}</label>
+        <input type="range" min="0" max="200" disabled={locked} defaultValue={color.saturation} key={`s${color.saturation}`} onMouseUp={(e) => onSettings({ color: { saturation: Number(e.target.value) } })} />
+      </div>
+      <div className="field">
+        <label>Hue {color.hue}</label>
+        <input type="range" min="-180" max="180" disabled={locked} defaultValue={color.hue} key={`h${color.hue}`} onMouseUp={(e) => onSettings({ color: { hue: Number(e.target.value) } })} />
+      </div>
+      <div className="row">
+        <a className="btn" href="/api/project/export">Export</a>
+        <label className="btn">
+          Import
+          <input type="file" accept="application/json" hidden onChange={(e) => e.target.files[0] && onImport(e.target.files[0])} />
+        </label>
+      </div>
+      <p className="note">
+        Color and OSD preview on this desk. LED cabinets only receive brightness / freeze / blackout / input over the published IP protocol. HDMI ingest, HDR, Genlock, and sending-card Ethernet cannot be added in software.
+      </p>
+    </>
+  );
+}
+
+function CanvasBoard({
+  project, selectedId, selectedLayer, onSelect, onSelectLayer,
+  onMove, onMoveEnd, onMoveLayer, onMoveLayerEnd,
+}) {
   const ref = useRef(null);
   const drag = useRef(null);
   const [size, setSize] = useState({ w: 800, h: 400 });
@@ -441,6 +702,13 @@ function CanvasBoard({ project, selectedId, onSelect, onMove, onMoveEnd }) {
     y: (size.h - project.canvas.height * scale) / 2,
   };
 
+  const filter = [
+    `contrast(${project.color?.contrast || 100}%)`,
+    `saturate(${project.color?.saturation || 100}%)`,
+    `hue-rotate(${project.color?.hue || 0}deg)`,
+    project.eyeSaver ? "sepia(0.25) brightness(0.82)" : "",
+  ].join(" ");
+
   function toCanvas(event) {
     const box = ref.current.getBoundingClientRect();
     return {
@@ -449,15 +717,20 @@ function CanvasBoard({ project, selectedId, onSelect, onMove, onMoveEnd }) {
     };
   }
 
-  function onPointerDown(event, controller, mode) {
+  function onPointerDown(event, target, kind, mode) {
     event.stopPropagation();
-    onSelect(controller.id);
+    if (kind === "layer") onSelectLayer(target.id);
+    else onSelect(target.id);
+    if (target.locked) return;
     const start = toCanvas(event);
     drag.current = {
-      id: controller.id,
+      id: target.id,
+      kind,
       mode,
       start,
-      origin: { ...controller.viewport },
+      origin: kind === "layer"
+        ? { x: target.x, y: target.y, width: target.width, height: target.height }
+        : { ...target.viewport },
     };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
@@ -468,70 +741,69 @@ function CanvasBoard({ project, selectedId, onSelect, onMove, onMoveEnd }) {
     const dx = now.x - drag.current.start.x;
     const dy = now.y - drag.current.start.y;
     const origin = drag.current.origin;
-    let viewport;
-    if (drag.current.mode === "resize") {
-      viewport = {
-        ...origin,
-        width: Math.max(320, Math.round(origin.width + dx)),
-        height: Math.max(180, Math.round(origin.height + dy)),
-      };
-    } else {
-      viewport = {
-        ...origin,
-        x: Math.round(origin.x + dx),
-        y: Math.round(origin.y + dy),
-      };
-    }
-    onMove(drag.current.id, viewport);
+    const box = drag.current.mode === "resize"
+      ? { ...origin, width: Math.max(320, Math.round(origin.width + dx)), height: Math.max(180, Math.round(origin.height + dy)) }
+      : { ...origin, x: Math.round(origin.x + dx), y: Math.round(origin.y + dy) };
+    if (drag.current.kind === "layer") onMoveLayer(drag.current.id, box);
+    else onMove(drag.current.id, box);
   }
 
   function onPointerUp() {
     if (!drag.current) return;
-    const controller = project.controllers.find((c) => c.id === drag.current.id);
-    if (controller) onMoveEnd(controller.id, controller.viewport);
+    if (drag.current.kind === "layer") {
+      const item = project.layers.find((layer) => layer.id === drag.current.id);
+      if (item) onMoveLayerEnd(item.id, { x: item.x, y: item.y, width: item.width, height: item.height });
+    } else {
+      const controller = project.controllers.find((c) => c.id === drag.current.id);
+      if (controller) onMoveEnd(controller.id, controller.viewport);
+    }
     drag.current = null;
   }
 
   return (
     <section className="stage-wrap">
       <div className="stage-toolbar">
-        <span className="btn ghost">
-          Canvas {project.canvas.width}×{project.canvas.height}
-        </span>
+        <span className="btn ghost">Canvas {project.canvas.width}×{project.canvas.height}</span>
       </div>
-      <div className="hint">Drag tiles to place senders on the wall · corner handle resizes</div>
+      <div className="hint">Take applies layers · drag senders or layers · FTB / freeze / lock on the top bar</div>
       <div
         className="canvas"
         ref={ref}
+        style={{ filter }}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerLeave={onPointerUp}
       >
-        {project.layers.map((layer) => (
+        {project.layers.filter((layer) => layer.visible !== false).map((layer) => (
           <div
             key={layer.id}
-            className="layer-box"
+            className={`layer-box ${selectedLayer === layer.id ? "selected" : ""} ${layer.kind || ""}`}
             style={{
               left: offset.x + layer.x * scale,
               top: offset.y + layer.y * scale,
               width: layer.width * scale,
               height: layer.height * scale,
+              zIndex: selectedLayer === layer.id ? 8 : 2,
+              pointerEvents: "auto",
+              opacity: (layer.opacity || 100) / 100,
             }}
+            onPointerDown={(event) => onPointerDown(event, layer, "layer", "move")}
           >
-            <span>{layer.name}</span>
+            <span>{layer.name} · {layer.source}</span>
+            <div className="handle" onPointerDown={(event) => onPointerDown(event, layer, "layer", "resize")} />
           </div>
         ))}
         {project.controllers.map((controller) => (
           <div
             key={controller.id}
-            className={`tile ${selectedId === controller.id ? "selected" : ""}`}
+            className={`tile ${selectedId === controller.id ? "selected" : ""} ${controller.testPattern ? "bars" : ""}`}
             style={{
               left: offset.x + controller.viewport.x * scale,
               top: offset.y + controller.viewport.y * scale,
               width: controller.viewport.width * scale,
               height: controller.viewport.height * scale,
             }}
-            onPointerDown={(event) => onPointerDown(event, controller, "move")}
+            onPointerDown={(event) => onPointerDown(event, controller, "controller", "move")}
           >
             <div className="tile-label">
               <strong>{controller.name}</strong>
@@ -544,12 +816,13 @@ function CanvasBoard({ project, selectedId, onSelect, onMove, onMoveEnd }) {
               <br />
               {controller.inputKey} · {Math.round((controller.brightness / 255) * 100)}%
             </div>
-            <div
-              className="handle"
-              onPointerDown={(event) => onPointerDown(event, controller, "resize")}
-            />
+            <div className="handle" onPointerDown={(event) => onPointerDown(event, controller, "controller", "resize")} />
           </div>
         ))}
+        {project.osd?.enabled ? (
+          <div className={`osd-banner ${project.osd.position || "top"}`}>{project.osd.text}</div>
+        ) : null}
+        {project.ftb?.active ? <div className="ftb-veil" /> : null}
       </div>
     </section>
   );

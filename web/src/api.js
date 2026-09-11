@@ -29,6 +29,12 @@ export const api = {
   startLab: (count) => json("POST", "/api/lab/start", { count }),
   stopLab: () => json("POST", "/api/lab/stop"),
   masterBrightness: (value) => json("POST", "/api/master-brightness", { value }),
+  take: () => json("POST", "/api/take"),
+  ftb: (payload) => json("POST", "/api/ftb", payload),
+  settings: (payload) => json("POST", "/api/settings", payload),
+  playlistAdd: (payload) => json("POST", "/api/playlist/add", payload),
+  playlistNext: () => json("POST", "/api/playlist/next"),
+  importProject: (payload) => json("POST", "/api/project/import", payload),
 };
 
 export function connectSocket(onProject) {

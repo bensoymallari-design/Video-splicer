@@ -12,7 +12,11 @@ Use this app when:
 - You want one H9-style canvas: tile senders, group brightness, freeze/blackout, input routing, and presets.
 - You would rather not roll the H9 rack just to change looks.
 
-Do **not** expect it to accept SDI/HDMI into the laptop and emit LED Ethernet the way an H9 sending card does.
+Some of it **can** be added. The H9 FPGA video engine **cannot**.
+
+This desk now includes the control-side H9 features that fit on a laptop: Take (layer-to-sender routing), FTB, lock, eye saver, OSD preview, color preview, input matrix, hardware presets P1–P8, EDID/viewport size, backup pairing, Ethernet port map, look playlist, and project import/export.
+
+It still does **not** ingest HDMI/SDI, mix real layers on the LED, or emit cabinet Ethernet. Those need hardware. Color/OSD are previewed on the desk; senders only receive the published IP commands (brightness, freeze, blackout, input, presets).
 
 ## Quick start
 
