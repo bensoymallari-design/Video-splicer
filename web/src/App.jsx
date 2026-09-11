@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
-import { assignOutputs, listScreens, windowFeatures } from "./screens.js";
+import { assignOutputs, listScreens } from "./screens.js";
 
 function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n));
@@ -267,6 +267,47 @@ export default function App() {
   const wrappedHead = show.loop ? playhead % timelineDuration : playhead;
   const playheadPct = clamp((wrappedHead / timelineDuration) * 100, 0, 100);
 
+  async function placeOnOutputs() {
+    setError("");
+    const popups = controllers.map((controller, index) =>
+      window.open(
+        `/output/${controller.id}?fs=1`,
+        `out-${controller.id}`,
+        `popup=yes,width=1280,height=720,left=${80 * index},top=${40 * index}`,
+      ),
+    );
+    if (!popups.some(Boolean)) {
+      setError("The browser blocked the output windows. Allow popups for this site.");
+      return;
+    }
+    const { screens, permission } = await listScreens();
+    const mapped = assignOutputs(screens, controllers.length);
+    popups.forEach((popup, index) => {
+      const screen = mapped[index];
+      if (!popup || popup.closed || !screen) return;
+      try {
+        popup.moveTo(Math.round(screen.left), Math.round(screen.top));
+        popup.resizeTo(Math.round(screen.width), Math.round(screen.height));
+      } catch {
+        /* still open; drag onto the GPU output */
+      }
+    });
+    const gpu = screens.filter((screen) => !screen.isPrimary);
+    if (permission === "unsupported") {
+      setNote(
+        "This browser cannot list GPU outputs. Drag each window onto an HDMI, DP, or USB-C screen, then press F.",
+      );
+    } else if (gpu.length) {
+      setNote(
+        `Placed on ${gpu.length} extra GPU output${gpu.length === 1 ? "" : "s"} (HDMI / DP / USB-C). Remaining windows stay here to drag.`,
+      );
+    } else {
+      setNote(
+        "Only one OS screen is visible. Extend the desktop across your output cards, then click Place on outputs again.",
+      );
+    }
+  }
+
   if (!project) {
     return <div className="boot">Opening production…</div>;
   }
@@ -312,42 +353,7 @@ export default function App() {
               onChange={(e) => setZoom(Number(e.target.value))}
             />
           </label>
-          <button
-            disabled={busy || !controllers.length}
-            onClick={() =>
-              run("Place on outputs", async () => {
-                const { screens, permission } = await listScreens();
-                const mapped = assignOutputs(screens, controllers.length);
-                const opened = [];
-                controllers.forEach((controller, index) => {
-                  const screen = mapped[index];
-                  const popup = window.open(
-                    `/output/${controller.id}?fs=1`,
-                    `out-${controller.id}`,
-                    windowFeatures(screen),
-                  );
-                  if (popup) opened.push(controller.name);
-                });
-                if (!opened.length) {
-                  throw new Error("The browser blocked the output windows");
-                }
-                const gpu = screens.filter((screen) => !screen.isPrimary);
-                if (permission === "unsupported") {
-                  setNote(
-                    "This browser cannot list GPU outputs. Drag each window onto an HDMI, DP, or USB-C screen, then press F.",
-                  );
-                } else if (gpu.length) {
-                  setNote(
-                    `Placed on ${gpu.length} extra GPU output${gpu.length === 1 ? "" : "s"} (HDMI / DP / USB-C). Remaining windows stay here to drag.`,
-                  );
-                } else {
-                  setNote(
-                    "Only one OS screen is visible. Extend the desktop across your output cards, then click Place on outputs again.",
-                  );
-                }
-              })
-            }
-          >
+          <button disabled={busy || !controllers.length} onClick={() => placeOnOutputs()}>
             Place on outputs
           </button>
         </div>
