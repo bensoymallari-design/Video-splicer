@@ -36,7 +36,7 @@ button, input, select {
 .app {
   height: 100%;
   display: grid;
-  grid-template-rows: 64px minmax(0, 1fr) 168px;
+  grid-template-rows: 64px minmax(0, 1fr) 200px;
   min-width: 0;
   overflow: hidden;
 }
@@ -333,15 +333,18 @@ button, input, select {
 }
 .chip-main b { display: block; font-size: 12px; }
 .chip-main span { color: var(--muted); font-size: 11px; }
+.section-actions { display: flex; gap: 6px; }
 .chip-del {
-  width: 32px;
+  min-width: 64px;
   border: 0;
   border-left: 1px solid var(--line);
-  background: transparent;
+  background: #2a1518;
   color: var(--red);
   cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0 10px;
 }
 .chip-del:hover { background: #2a1518; }
 .chip b { display: block; font-size: 12px; }
