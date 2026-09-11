@@ -84,14 +84,14 @@ export function createStore() {
   }
 
   function addController(input) {
-    const model = MODELS[input.model] ? input.model : "MCTRL4K";
+    const model = MODELS[input.model] ? input.model : "GENERIC";
     const spec = MODELS[model];
     const count = project.controllers.length;
     const tileW = Math.min(spec.maxWidth, 3840);
     const tileH = Math.min(spec.maxHeight, 2160);
     const controller = {
       id: randomUUID(),
-      name: input.name || `${spec.label} ${count + 1}`,
+      name: input.name || `Display ${count + 1}`,
       model,
       host: input.host,
       port: Number(input.port) || 5200,

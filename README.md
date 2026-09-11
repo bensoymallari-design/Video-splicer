@@ -1,6 +1,6 @@
 # Lumen Splice
 
-Watchout-inspired **production desk** for a laptop: load media, place cues on a stage, crop them across display windows, and still talk to NovaStar LED senders (MCTRL4K and compatible) over **IP control** (TCP **5200** / UDP **5201**).
+Watchout-inspired **production desk** for a laptop: load media, place cues on a stage, crop them across display windows, and talk to NovaStar LED controllers over **IP control** (TCP **5200** / UDP **5201**).
 
 This is **not** Dataton Watchout, and it is **not** an H9 video splicer.
 
@@ -8,16 +8,17 @@ This is **not** Dataton Watchout, and it is **not** an H9 video splicer.
 
 - **Media bin** — load videos and images.
 - **Stage** — place cues, drag and resize them.
-- **Displays** — each MCTRL (or lab simulator) is a viewport on the stage.
+- **Displays** — each controller (or lab simulator) is a viewport on the stage.
 - **Timeline** — shared playhead; Play / Pause / Stop / GO; click the ruler to seek.
 - **Display windows** — one popup per display, cropped to that viewport. Drag each window onto the PC screen that is HDMI/DP-cabled into that sender.
-- **Sender control** — brightness, freeze, blackout, probe, still using NovaStar Central Control Protocol V1.5.0.
+- **Controller control** — brightness, freeze, blackout, probe, using NovaStar Central Control Protocol V1.5.0. That protocol is shared across NovaStar senders, not tied to one model.
 
 ## What it is not
 
-- Video does **not** go to an MCTRL over Ethernet. The GPU still has to output HDMI/DP into each sender.
+- Video does **not** go to a controller over Ethernet. The GPU still has to output HDMI/DP into each sender.
 - No Watchout clustering, showfile compatibility, or Dataton license.
 - No H9 FPGA ingest/mix: this app cannot take HDMI/SDI/NDI in and splice it for the wall.
+- Firmware still varies. If a box ignores a command, probe TCP 5200 and use the device web UI at `http://<ip>/`.
 
 ## Quick start
 
@@ -32,7 +33,7 @@ Open [http://127.0.0.1:5173](http://127.0.0.1:5173).
 2. **Load media…** into the bin, then **+ Stage**.
 3. **Open display windows** and Play.
 
-Real senders: same LAN, **Add** by IP (TCP `5200`). Brightness / freeze / blackout in the display inspector are control-only.
+Real controllers: same LAN, **Add** by IP (TCP `5200`). Brightness / freeze / blackout in the display inspector are control-only.
 
 ## Protocol
 

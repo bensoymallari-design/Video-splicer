@@ -116,7 +116,7 @@ describe("simulator", () => {
       host: "127.0.0.1",
       port: 0,
       name: "lab-1",
-      model: "MCTRL4K",
+      model: "GENERIC",
     });
     try {
       const reply = await sendTcp("127.0.0.1", sim.port, setBrightness(128));
@@ -135,7 +135,7 @@ describe("simulator", () => {
       host: "127.0.0.1",
       port: 0,
       name: "lab-2",
-      model: "MCTRL4K",
+      model: "GENERIC",
     });
     try {
       await sendTcp("127.0.0.1", sim.port, setFreeze(true));
@@ -150,10 +150,17 @@ describe("simulator", () => {
 });
 
 describe("project store", () => {
+  it("names a new controller as a generic display", () => {
+    const store = createStore();
+    const controller = store.addController({ host: "10.0.0.8" });
+    assert.equal(controller.name, "Display 1");
+    assert.equal(controller.model, "GENERIC");
+  });
+
   it("tiles 4 controllers as 2x2 on the canvas", () => {
     const store = createStore();
     for (let i = 0; i < 4; i += 1) {
-      store.addController({ host: `192.168.1.${10 + i}`, model: "MCTRL4K" });
+      store.addController({ host: `192.168.1.${10 + i}` });
     }
     store.autoLayout("2x2");
     const [a, b, c, d] = store.project.controllers;

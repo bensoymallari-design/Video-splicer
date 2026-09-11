@@ -687,8 +687,8 @@ export default function App() {
             <>
               <h2>Displays</h2>
               <p className="hint">
-                Each display is one MCTRL (or similar). Add by IP, then place its frame on the
-                stage.
+                Each display is one NovaStar controller on the LAN. Add by IP, then place its
+                frame on the stage.
               </p>
               <div className="row">
                 <input value={ip} onChange={(event) => setIp(event.target.value)} placeholder="IP" />
@@ -774,7 +774,7 @@ export default function App() {
         <p className="wo-foot-note">
           Watchout-inspired production: media on a stage, display windows crop their viewports,
           Play runs the show. This is not Dataton Watchout. Video still leaves this computer over
-          HDMI/DP into each sender — Lumen Splice cannot stream pixels to an MCTRL over Ethernet.
+          HDMI/DP into each sender — Lumen Splice cannot stream pixels to a controller over Ethernet.
         </p>
       </footer>
     </div>

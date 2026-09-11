@@ -201,13 +201,13 @@ async function startLab(count = 4) {
     const sim = await createSimulator({
       host: "127.0.0.1",
       port: 15200 + i,
-      name: `MCTRL4K-${i + 1}`,
-      model: "MCTRL4K",
+      name: `Display ${i + 1}`,
+      model: "GENERIC",
     });
     simulators.set(sim.port, sim);
     const controller = store.addController({
       name: sim.name,
-      model: "MCTRL4K",
+      model: "GENERIC",
       host: sim.host,
       port: sim.port,
       simulated: true,
