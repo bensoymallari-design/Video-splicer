@@ -34,6 +34,8 @@ export function emptyProject() {
       speed: 40,
     },
     playlist: { ids: [], intervalSec: 8, running: false, cursor: 0 },
+    media: [],
+    clips: [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -48,6 +50,8 @@ function mergeProject(raw) {
     osd: { ...base.osd, ...(raw.osd || {}) },
     ftb: { ...base.ftb, ...(raw.ftb || {}) },
     playlist: { ...base.playlist, ...(raw.playlist || {}) },
+    media: raw.media || [],
+    clips: raw.clips || [],
     sources: Array.isArray(raw.sources) && raw.sources.length ? raw.sources : base.sources,
     controllers: raw.controllers || [],
     layers: raw.layers || [],
@@ -249,6 +253,50 @@ export function createStore() {
     project = mergeProject(next);
   }
 
+  function addMedia(input) {
+    const item = {
+      id: randomUUID(),
+      name: input.name,
+      kind: input.kind || "video",
+      filename: input.filename,
+      url: `/media/${input.filename}`,
+    };
+    project.media.push(item);
+    return item;
+  }
+
+  function addClip(input = {}) {
+    const media = project.media.find((item) => item.id === input.mediaId) || project.media[0];
+    if (!media) {
+      const err = new Error("Load a video or image first");
+      err.status = 400;
+      throw err;
+    }
+    const clip = {
+      id: randomUUID(),
+      mediaId: media.id,
+      name: input.name || media.name,
+      x: input.x ?? 0,
+      y: input.y ?? 0,
+      width: input.width ?? project.canvas.width,
+      height: input.height ?? project.canvas.height,
+      z: project.clips.length + 1,
+    };
+    project.clips.push(clip);
+    return clip;
+  }
+
+  function removeMedia(id) {
+    const item = project.media.find((m) => m.id === id);
+    project.media = project.media.filter((m) => m.id !== id);
+    project.clips = project.clips.filter((c) => c.mediaId !== id);
+    return item;
+  }
+
+  function removeClip(id) {
+    project.clips = project.clips.filter((c) => c.id !== id);
+  }
+
   function assertUnlocked() {
     if (project.locked) {
       const err = new Error("Screen is locked");
@@ -268,6 +316,10 @@ export function createStore() {
     addPreset,
     applyPreset,
     autoLayout,
+    addClip,
+    addMedia,
+    removeClip,
+    removeMedia,
     replace,
     assertUnlocked,
     get project() {

@@ -1,8 +1,12 @@
 import http from "node:http";
 import path from "node:path";
+import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import express from "express";
+import multer from "multer";
 import { WebSocketServer } from "ws";
 import { createStore } from "./store.js";
+import { createShow } from "./show.js";
 import { createSimulator } from "./simulator.js";
 import { probeTcp, sendCommand } from "./transport.js";
 import { eyeSaverBrightness, takeMap } from "./routing.js";
@@ -23,7 +27,10 @@ import {
 } from "./protocol.js";
 
 const PORT = Number(process.env.PORT) || 8787;
+const MEDIA_DIR = path.join(process.cwd(), "data", "media");
+fs.mkdirSync(MEDIA_DIR, { recursive: true });
 const store = createStore();
+const show = createShow();
 const simulators = new Map();
 const clients = new Set();
 
@@ -37,6 +44,7 @@ function broadcast(type, payload) {
 function projectPayload() {
   return {
     ...store.snapshot(),
+    show: show.snapshot(),
     models: MODELS,
     inputs: INPUTS,
     lab: {
@@ -44,6 +52,10 @@ function projectPayload() {
       count: simulators.size,
     },
   };
+}
+
+function broadcastClock() {
+  broadcast("clock", show.snapshot());
 }
 
 async function saveAndBroadcast() {
@@ -226,11 +238,25 @@ app.get("/api/project", (_req, res) => {
   res.json(projectPayload());
 });
 
+app.use("/media", express.static(MEDIA_DIR, { acceptRanges: true }));
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: MEDIA_DIR,
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "") || ".bin";
+      cb(null, `${Date.now()}-${randomUUID()}${ext.toLowerCase()}`);
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 * 1024 },
+});
+
 app.use((req, res, next) => {
   if (req.method === "GET") return next();
   if (!store.project.locked) return next();
   if (req.path === "/api/settings" && req.body?.locked === false) return next();
   if (req.path.startsWith("/api/lab")) return next();
+  if (req.path.startsWith("/api/show")) return next();
   return res.status(423).json({ error: "Screen is locked" });
 });
 
@@ -468,6 +494,59 @@ app.get("/api/project/export", (_req, res) => {
   res.json(store.snapshot());
 });
 
+app.post("/api/media", upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "file is required" });
+  const mime = req.file.mimetype || "";
+  const kind = mime.startsWith("image/") ? "image" : "video";
+  const item = store.addMedia({
+    name: req.file.originalname || req.file.filename,
+    kind,
+    filename: req.file.filename,
+  });
+  store.addClip({ mediaId: item.id });
+  res.json({ media: item, project: await saveAndBroadcast() });
+});
+
+app.delete("/api/media/:id", async (req, res) => {
+  const item = store.removeMedia(req.params.id);
+  if (item?.filename) {
+    fs.unlink(path.join(MEDIA_DIR, item.filename), () => {});
+  }
+  res.json(await saveAndBroadcast());
+});
+
+app.post("/api/clips", async (req, res) => {
+  try {
+    const clip = store.addClip(req.body || {});
+    res.json({ clip, project: await saveAndBroadcast() });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/clips/:id", async (req, res) => {
+  store.removeClip(req.params.id);
+  res.json(await saveAndBroadcast());
+});
+
+app.post("/api/show/play", async (_req, res) => {
+  const clock = show.play();
+  broadcastClock();
+  res.json({ show: clock, project: projectPayload() });
+});
+
+app.post("/api/show/pause", (_req, res) => {
+  const clock = show.pause();
+  broadcastClock();
+  res.json({ show: clock });
+});
+
+app.post("/api/show/stop", (_req, res) => {
+  const clock = show.stop();
+  broadcastClock();
+  res.json({ show: clock });
+});
+
 const dist = path.join(process.cwd(), "web", "dist");
 if (process.env.NODE_ENV === "production") {
   app.use(express.static(dist));
@@ -481,8 +560,13 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 wss.on("connection", (ws) => {
   clients.add(ws);
   ws.send(JSON.stringify({ type: "project", payload: projectPayload() }));
+  ws.send(JSON.stringify({ type: "clock", payload: show.snapshot() }));
   ws.on("close", () => clients.delete(ws));
 });
+
+setInterval(() => {
+  if (show.snapshot().playing) broadcastClock();
+}, 250);
 
 await store.load();
 server.listen(PORT, "0.0.0.0", () => {

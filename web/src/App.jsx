@@ -42,7 +42,7 @@ export default function App() {
   const [tab, setTab] = useState("sender");
   const [modal, setModal] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState("");
+  const [clock, setClock] = useState({ playing: false, mediaTime: 0, loop: true });
   const [form, setForm] = useState({
     host: "192.168.0.10",
     port: 5200,
@@ -53,7 +53,10 @@ export default function App() {
 
   useEffect(() => {
     api.project().then(setProject).catch((err) => setToast(err.message));
-    const ws = connectSocket(setProject);
+    const ws = connectSocket((msg) => {
+      if (msg.type === "project") setProject(msg.payload);
+      if (msg.type === "clock") setClock(msg.payload);
+    });
     return () => ws.close();
   }, []);
 
@@ -177,6 +180,15 @@ export default function App() {
         </div>
       </header>
 
+      <ShowBar
+        project={project}
+        clock={clock}
+        busy={busy}
+        locked={locked}
+        onRun={run}
+        onToast={setToast}
+      />
+
       <main className="workspace">
         <aside className="side">
           <div className="section-h">
@@ -244,6 +256,7 @@ export default function App() {
             });
           }}
           onMoveLayerEnd={(id, box) => run(() => api.patchLayer(id, box))}
+          clock={clock}
         />
 
         <Inspector
@@ -435,6 +448,54 @@ export default function App() {
       {toast ? (
         <div className="toast" onClick={() => setToast("")}>{toast}</div>
       ) : null}
+    </div>
+  );
+}
+
+function ShowBar({ project, clock, busy, locked, onRun, onToast }) {
+  function openDisplays() {
+    if (!project.controllers.length) {
+      onToast("Add controllers or start Lab, then open displays");
+      return;
+    }
+    for (const controller of project.controllers) {
+      window.open(`/output/${controller.id}`, `lumen-display-${controller.id}`);
+    }
+    onToast("Drag each display window onto the HDMI screen that feeds that MCTRL4K");
+  }
+
+  return (
+    <div className="showbar">
+      <span className="showbar-label">Show</span>
+      <label className="btn">
+        Load media
+        <input
+          type="file"
+          accept="video/mp4,video/webm,video/quicktime,image/*"
+          hidden
+          disabled={locked}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) onRun(() => api.uploadMedia(file), `${file.name} on stage`);
+          }}
+        />
+      </label>
+      <button className="btn primary" disabled={busy || !(project.clips || []).length} onClick={() => onRun(() => api.showPlay(), "Playing all displays")}>
+        Play
+      </button>
+      <button className="btn" disabled={busy} onClick={() => onRun(() => api.showPause())}>Pause</button>
+      <button className="btn" disabled={busy} onClick={() => onRun(() => api.showStop())}>Stop</button>
+      <button className="btn" disabled={busy} onClick={openDisplays}>Open displays</button>
+      <span className="showbar-meta">
+        {(project.media || []).length} media · {(project.clips || []).length} on stage · {clock.playing ? "PLAY" : "STOP"} {Math.floor(clock.mediaTime || 0)}s
+      </span>
+      {(project.media || []).map((item) => (
+        <button key={item.id} className="chip ghost-chip" disabled={locked} onClick={() => onRun(() => api.removeMedia(item.id), "Media removed")}>
+          {item.name} ×
+        </button>
+      ))}
+      <span className="showbar-hint">Watchout-style: this PC plays the file. Drag display windows to the screens cabled into each controller.</span>
     </div>
   );
 }
@@ -720,9 +781,27 @@ function ScreenPane({ project, locked, onSettings, onImport }) {
   );
 }
 
+}
+
+function StageVideo({ src, style, clock }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    const t = clock?.mediaTime || 0;
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      const target = clock?.loop ? t % video.duration : Math.min(t, video.duration);
+      if (Math.abs(video.currentTime - target) > 0.35) video.currentTime = target;
+    }
+    if (clock?.playing) video.play().catch(() => {});
+    else video.pause();
+  }, [clock]);
+  return <video ref={ref} className="stage-clip" style={style} src={src} muted playsInline loop={clock?.loop} />;
+}
+
 function CanvasBoard({
   project, selectedId, selectedLayer, onSelect, onSelectLayer,
-  onMove, onMoveEnd, onMoveLayer, onMoveLayerEnd,
+  onMove, onMoveEnd, onMoveLayer, onMoveLayerEnd, clock,
 }) {
   const ref = useRef(null);
   const drag = useRef(null);
@@ -821,6 +900,22 @@ function CanvasBoard({
         onPointerUp={onPointerUp}
         onPointerLeave={onPointerUp}
       >
+        {(project.clips || []).map((clip) => {
+          const media = (project.media || []).find((item) => item.id === clip.mediaId);
+          if (!media) return null;
+          const style = {
+            left: offset.x + clip.x * scale,
+            top: offset.y + clip.y * scale,
+            width: clip.width * scale,
+            height: clip.height * scale,
+            zIndex: 1,
+            pointerEvents: "none",
+          };
+          if (media.kind === "image") {
+            return <img key={clip.id} alt="" src={media.url} className="stage-clip" style={style} />;
+          }
+          return <StageVideo key={clip.id} src={media.url} style={style} clock={clock} />;
+        })}
         {project.layers.filter((layer) => layer.visible !== false).map((layer) => (
           <div
             key={layer.id}

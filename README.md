@@ -18,6 +18,17 @@ This desk now includes the control-side H9 features that fit on a laptop: Take (
 
 It still does **not** ingest HDMI/SDI, mix real layers on the LED, or emit cabinet Ethernet. Those need hardware. Color/OSD are previewed on the desk; senders only receive the published IP commands (brightness, freeze, blackout, input, presets).
 
+### Watchout-style playback on this PC
+
+Dataton Watchout is a media server: it **plays files** and **splits them across displays**. This app now has a smaller version of that:
+
+1. **Load media** (mp4 / webm / image) onto the stage.
+2. **Open displays** — one window per MCTRL4K, cropped to that sender’s viewport.
+3. Drag each window onto the PC screen that is HDMI/DP-cabled into that controller.
+4. **Play** — both windows share one clock so they run together.
+
+That is still **not** Watchout, and video still does **not** go to the MCTRL4K over IP. The PC GPU outputs the picture; this app syncs the crops and still controls the senders on the LAN.
+
 ## Quick start
 
 ```bash
