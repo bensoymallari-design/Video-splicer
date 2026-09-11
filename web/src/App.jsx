@@ -52,6 +52,16 @@ export default function App() {
     return () => ws.close();
   }, []);
 
+  useEffect(() => {
+    if (!project?.controllers.length) {
+      if (selectedId) setSelectedId(null);
+      return;
+    }
+    if (!project.controllers.some((c) => c.id === selectedId)) {
+      setSelectedId(project.controllers[0].id);
+    }
+  }, [project, selectedId]);
+
   const selected = project?.controllers.find((c) => c.id === selectedId) || null;
 
   async function run(fn, success) {
