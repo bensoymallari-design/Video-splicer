@@ -21,6 +21,7 @@ import { createSimulator } from "../server/simulator.js";
 import { sendTcp } from "../server/transport.js";
 import { createStore } from "../server/store.js";
 import { createShow } from "../server/show.js";
+import { assignOutputs, windowFeatures } from "../web/src/screens.js";
 
 function hex(buf) {
   return toHex(buf);
@@ -238,6 +239,28 @@ describe("show clock", () => {
     show.stop();
     assert.equal(show.snapshot().playing, false);
     assert.equal(show.snapshot().mediaTime, 0);
+  });
+});
+
+describe("GPU output placement", () => {
+  it("prefers extra OS screens so the production desk can stay on the primary", () => {
+    const screens = [
+      { id: "0", label: "Laptop", isPrimary: true, left: 0, top: 0, width: 1920, height: 1080 },
+      { id: "1", label: "HDMI-1", isPrimary: false, left: 1920, top: 0, width: 3840, height: 2160 },
+      { id: "2", label: "DP-1", isPrimary: false, left: 5760, top: 0, width: 3840, height: 2160 },
+    ];
+    const mapped = assignOutputs(screens, 4);
+    assert.equal(mapped[0].label, "HDMI-1");
+    assert.equal(mapped[1].label, "DP-1");
+    assert.equal(mapped[2], null);
+    assert.equal(mapped[3], null);
+  });
+
+  it("builds a popup placed on that OS screen", () => {
+    assert.match(
+      windowFeatures({ left: 1920, top: 0, width: 3840, height: 2160 }),
+      /left=1920,top=0,width=3840,height=2160/,
+    );
   });
 });
 

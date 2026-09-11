@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
+import { assignOutputs, listScreens, windowFeatures } from "./screens.js";
 
 function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n));
@@ -21,6 +22,7 @@ export default function App() {
   const [show, setShow] = useState({ playing: false, loop: true, mediaTime: 0 });
   const [playhead, setPlayhead] = useState(0);
   const [error, setError] = useState("");
+  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedClipId, setSelectedClipId] = useState(null);
   const [selectedDisplayId, setSelectedDisplayId] = useState(null);
@@ -313,21 +315,46 @@ export default function App() {
           <button
             disabled={busy || !controllers.length}
             onClick={() =>
-              controllers.forEach((controller) =>
-                window.open(
-                  `/output/${controller.id}`,
-                  `out-${controller.id}`,
-                  "popup,width=1280,height=720",
-                ),
-              )
+              run("Place on outputs", async () => {
+                const { screens, permission } = await listScreens();
+                const mapped = assignOutputs(screens, controllers.length);
+                const opened = [];
+                controllers.forEach((controller, index) => {
+                  const screen = mapped[index];
+                  const popup = window.open(
+                    `/output/${controller.id}?fs=1`,
+                    `out-${controller.id}`,
+                    windowFeatures(screen),
+                  );
+                  if (popup) opened.push(controller.name);
+                });
+                if (!opened.length) {
+                  throw new Error("The browser blocked the output windows");
+                }
+                const gpu = screens.filter((screen) => !screen.isPrimary);
+                if (permission === "unsupported") {
+                  setNote(
+                    "This browser cannot list GPU outputs. Drag each window onto an HDMI, DP, or USB-C screen, then press F.",
+                  );
+                } else if (gpu.length) {
+                  setNote(
+                    `Placed on ${gpu.length} extra GPU output${gpu.length === 1 ? "" : "s"} (HDMI / DP / USB-C). Remaining windows stay here to drag.`,
+                  );
+                } else {
+                  setNote(
+                    "Only one OS screen is visible. Extend the desktop across your output cards, then click Place on outputs again.",
+                  );
+                }
+              })
             }
           >
-            Open display windows
+            Place on outputs
           </button>
         </div>
       </header>
 
       {error ? <div className="wo-error">{error}</div> : null}
+      {note ? <div className="wo-note">{note}</div> : null}
 
       <div className="wo-body">
         <aside className="wo-bin">
@@ -655,7 +682,7 @@ export default function App() {
                 <button
                   onClick={() =>
                     window.open(
-                      `/output/${selectedDisplay.id}`,
+                      `/output/${selectedDisplay.id}?fs=1`,
                       `out-${selectedDisplay.id}`,
                       "popup,width=1280,height=720",
                     )
@@ -687,8 +714,9 @@ export default function App() {
             <>
               <h2>Displays</h2>
               <p className="hint">
-                Each display is one NovaStar controller on the LAN. Add by IP, then place its
-                frame on the stage.
+                Each display is one NovaStar controller. Place on outputs puts a fullscreen
+                window on each extra GPU screen (HDMI, DisplayPort, USB-C). Keep this desk on
+                the laptop panel.
               </p>
               <div className="row">
                 <input value={ip} onChange={(event) => setIp(event.target.value)} placeholder="IP" />
@@ -772,9 +800,9 @@ export default function App() {
           })}
         </div>
         <p className="wo-foot-note">
-          Watchout-inspired production: media on a stage, display windows crop their viewports,
-          Play runs the show. This is not Dataton Watchout. Video still leaves this computer over
-          HDMI/DP into each sender — Lumen Splice cannot stream pixels to a controller over Ethernet.
+          Watchout-inspired production on one PC: Place on outputs fills this computer’s HDMI /
+          DisplayPort / USB-C screens. That is not Dataton Watchout (no clustering, warp, blend,
+          or show files). Video still leaves the GPU into each sender — not over Ethernet.
         </p>
       </footer>
     </div>

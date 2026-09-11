@@ -229,6 +229,10 @@ async function startLab(count = 4) {
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
+app.use((_req, res, next) => {
+  res.setHeader("Permissions-Policy", "fullscreen=(self), window-management=(self)");
+  next();
+});
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "video-splicer", port: PORT });

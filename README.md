@@ -35,6 +35,17 @@ Open [http://127.0.0.1:5173](http://127.0.0.1:5173).
 
 Real controllers: same LAN, **Add** by IP (TCP `5200`). Brightness / freeze / blackout in the display inspector are control-only.
 
+## Many GPU outputs (HDMI / DP / USB-C)
+
+This is the Watchout-style path on **one PC** with capture/output cards:
+
+1. Windows/macOS must see each card as an extended desktop screen.
+2. Keep the production desk on the laptop panel.
+3. Click **Place on outputs** — one fullscreen window per extra screen, cropped to that display’s viewport.
+4. Cable those GPU outputs into the NovaStar senders. Press **F** in a window if it is not already fullscreen.
+
+That does **not** clone Dataton Watchout. No clustering of other PCs, warp, edge blend, audio cues, or `.watch` files. Those are separate products. Video still leaves this GPU over the cable, not over Ethernet to the sender.
+
 ## Protocol
 
 Packets follow NovaStar Central Control Protocol V1.5.0:
