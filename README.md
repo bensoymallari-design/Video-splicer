@@ -1,18 +1,24 @@
 # Lumen Splice
 
-Laptop control desk for NovaStar LED senders (MCTRL4K and compatible). It speaks **IP only** — TCP port **5200** or UDP port **5201** — using NovaStar’s published [Central Control Protocol](https://www.novastar.tech) so you can run **2–6 or more** controllers from a browser instead of sitting at an H9 splicer.
+Watchout-inspired **production desk** for a laptop: load media, place cues on a stage, crop them across display windows, and talk to NovaStar LED controllers over **IP control** (TCP **5200** / UDP **5201**).
 
-## What this replaces — and what it does not
+This is **not** Dataton Watchout, and it is **not** an H9 video splicer.
 
-The H9 is two machines in one: an FPGA **video splicer** and a **sending-card** system. A laptop can take over the second job (unified control of several MCTRL4K units). It cannot take over the first job unless the laptop GPU (or another matrix) is already feeding HDMI/DP/DVI into those senders.
+## What it is
 
-Use this app when:
+- **Media bin** — load videos and images.
+- **Stage** — place cues, drag and resize them.
+- **Displays** — each controller (or lab simulator) is a viewport on the stage.
+- **Timeline** — shared playhead; Play / Pause / Stop / GO; click the ruler to seek.
+- **Display windows** — one popup per display, cropped to that viewport. Drag each window onto the PC screen that is HDMI/DP-cabled into that sender.
+- **Controller control** — brightness, freeze, blackout, probe, using NovaStar Central Control Protocol V1.5.0. That protocol is shared across NovaStar senders, not tied to one model.
 
-- Each MCTRL4K already has a video input (GPU outputs, a small matrix, or playback machines).
-- You want one H9-style canvas: tile senders, group brightness, freeze/blackout, input routing, and presets.
-- You would rather not roll the H9 rack just to change looks.
+## What it is not
 
-Do **not** expect it to accept SDI/HDMI into the laptop and emit LED Ethernet the way an H9 sending card does.
+- Video does **not** go to a controller over Ethernet. The GPU still has to output HDMI/DP into each sender.
+- No Watchout clustering, showfile compatibility, or Dataton license.
+- No H9 FPGA ingest/mix: this app cannot take HDMI/SDI/NDI in and splice it for the wall.
+- Firmware still varies. If a box ignores a command, probe TCP 5200 and use the device web UI at `http://<ip>/`.
 
 ## Quick start
 
@@ -23,27 +29,17 @@ npm run dev
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173).
 
-### Try it without hardware
+1. **Lab 4** (or Lab 6) to create local display simulators on `127.0.0.1:15200+`.
+2. **Load media…** into the bin, then **+ Stage**.
+3. **Open display windows** and Play.
 
-1. Click **Lab 4× MCTRL4K** (or **Lab 6**).
-2. Four (or six) local simulators bind on `127.0.0.1:15200+`.
-3. Drag tiles on the canvas, change brightness, freeze, blackout, and save a look.
-
-### Talk to real senders
-
-1. Put the laptop on the same LAN as the controllers.
-2. **Add by IP** — default TCP `5200` (UDP `5201` is also available).
-3. Tile the wall with **1×N / 2×2 / 2×3**, then use master brightness / Live / Freeze / Blackout.
-
-MCTRL4K loading is treated as **4096×2160@60** (max width or height 7680). The inspector warns if a viewport is oversized.
+Real controllers: same LAN, **Add** by IP (TCP `5200`). Brightness / freeze / blackout in the display inspector are control-only.
 
 ## Protocol
 
 Packets follow NovaStar Central Control Protocol V1.5.0:
 
 `[0x55 0xAA][content][checksum]` with `checksum = sum(content) + 0x5555` (little-endian).
-
-Implemented writes:
 
 | Function | Register (wire) |
 | --- | --- |
@@ -56,8 +52,6 @@ Implemented writes:
 | Controller mode | `0x0008fff2` |
 | Layer source | `0x0a000003` |
 
-Firmware differences exist between MCTRL-generation senders and newer COEX boxes. If a box ignores a command, use **Probe IP** and confirm TCP 5200 is open; the device web UI is still available at `http://<ip>/`.
-
 ## Production build
 
 ```bash
@@ -66,6 +60,4 @@ npm run build
 npm start
 ```
 
-Serves the UI and API together on port **8787**.
-
-Project state is stored in `data/project.json`.
+Serves the UI and API together on port **8787**. Project state is in `data/project.json`; uploaded files live in `data/media/`.

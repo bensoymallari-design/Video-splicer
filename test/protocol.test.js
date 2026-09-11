@@ -20,6 +20,7 @@ import {
 import { createSimulator } from "../server/simulator.js";
 import { sendTcp } from "../server/transport.js";
 import { createStore } from "../server/store.js";
+import { createShow } from "../server/show.js";
 
 function hex(buf) {
   return toHex(buf);
@@ -115,7 +116,7 @@ describe("simulator", () => {
       host: "127.0.0.1",
       port: 0,
       name: "lab-1",
-      model: "MCTRL4K",
+      model: "GENERIC",
     });
     try {
       const reply = await sendTcp("127.0.0.1", sim.port, setBrightness(128));
@@ -134,7 +135,7 @@ describe("simulator", () => {
       host: "127.0.0.1",
       port: 0,
       name: "lab-2",
-      model: "MCTRL4K",
+      model: "GENERIC",
     });
     try {
       await sendTcp("127.0.0.1", sim.port, setFreeze(true));
@@ -149,10 +150,17 @@ describe("simulator", () => {
 });
 
 describe("project store", () => {
+  it("names a new controller as a generic display", () => {
+    const store = createStore();
+    const controller = store.addController({ host: "10.0.0.8" });
+    assert.equal(controller.name, "Display 1");
+    assert.equal(controller.model, "GENERIC");
+  });
+
   it("tiles 4 controllers as 2x2 on the canvas", () => {
     const store = createStore();
     for (let i = 0; i < 4; i += 1) {
-      store.addController({ host: `192.168.1.${10 + i}`, model: "MCTRL4K" });
+      store.addController({ host: `192.168.1.${10 + i}` });
     }
     store.autoLayout("2x2");
     const [a, b, c, d] = store.project.controllers;
@@ -171,6 +179,65 @@ describe("project store", () => {
     controller.brightness = 255;
     store.applyPreset(preset.id);
     assert.equal(store.getController(controller.id).brightness, 10);
+  });
+
+  it("merges older project files with new screen fields", () => {
+    const store = createStore();
+    store.replace({ name: "Old", controllers: [], layers: [], presets: [] });
+    assert.equal(store.project.osd.enabled, false);
+    assert.equal(store.project.color.contrast, 100);
+    assert.equal(store.project.sources.length, 4);
+  });
+
+  it("adds a stage cue from the media bin without filling the whole canvas", () => {
+    const store = createStore();
+    const media = store.addMedia({ name: "loop.mp4", kind: "video", filename: "loop.mp4" });
+    assert.equal(store.project.clips.length, 0);
+    const clip = store.addClip({ mediaId: media.id });
+    assert.equal(clip.width, 1920);
+    assert.equal(clip.height, 1080);
+    assert.equal(clip.start, 0);
+    assert.equal(clip.duration, 10);
+    assert.equal(store.project.clips.length, 1);
+    store.removeMedia(media.id);
+    assert.equal(store.project.clips.length, 0);
+  });
+});
+
+describe("layer take routing", () => {
+  it("routes each sender from the top overlapping layer", async () => {
+    const { takeMap } = await import("../server/routing.js");
+    const project = {
+      controllers: [
+        { id: "a", inputKey: "HDMI", viewport: { x: 0, y: 0, width: 1920, height: 1080 } },
+        { id: "b", inputKey: "HDMI", viewport: { x: 1920, y: 0, width: 1920, height: 1080 } },
+      ],
+      layers: [
+        { id: "l1", visible: true, z: 1, source: "DP", x: 0, y: 0, width: 3840, height: 1080 },
+        { id: "l2", visible: true, z: 2, source: "DVI1", x: 1920, y: 0, width: 1920, height: 1080 },
+      ],
+    };
+    const routes = takeMap(project);
+    assert.equal(routes.find((r) => r.controllerId === "a").inputKey, "DP");
+    assert.equal(routes.find((r) => r.controllerId === "b").inputKey, "DVI1");
+  });
+});
+
+describe("show clock", () => {
+  it("plays, seeks, and stops from a shared playhead", () => {
+    const show = createShow();
+    assert.equal(show.snapshot().playing, false);
+    assert.equal(show.snapshot().mediaTime, 0);
+    show.seek(12.5);
+    assert.equal(show.snapshot().mediaTime, 12.5);
+    show.play();
+    assert.equal(show.snapshot().playing, true);
+    show.pause();
+    assert.equal(show.snapshot().playing, false);
+    assert.ok(show.snapshot().mediaTime >= 12.5);
+    show.stop();
+    assert.equal(show.snapshot().playing, false);
+    assert.equal(show.snapshot().mediaTime, 0);
   });
 });
 

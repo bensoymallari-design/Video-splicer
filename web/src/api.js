@@ -29,14 +29,36 @@ export const api = {
   startLab: (count) => json("POST", "/api/lab/start", { count }),
   stopLab: () => json("POST", "/api/lab/stop"),
   masterBrightness: (value) => json("POST", "/api/master-brightness", { value }),
+  take: () => json("POST", "/api/take"),
+  ftb: (payload) => json("POST", "/api/ftb", payload),
+  settings: (payload) => json("POST", "/api/settings", payload),
+  playlistAdd: (payload) => json("POST", "/api/playlist/add", payload),
+  playlistNext: () => json("POST", "/api/playlist/next"),
+  importProject: (payload) => json("POST", "/api/project/import", payload),
+  addClip: (payload) => json("POST", "/api/clips", payload),
+  removeClip: (id) => json("DELETE", `/api/clips/${id}`),
+  removeMedia: (id) => json("DELETE", `/api/media/${id}`),
+  showPlay: () => json("POST", "/api/show/play"),
+  showPause: () => json("POST", "/api/show/pause"),
+  showStop: () => json("POST", "/api/show/stop"),
+  showSeek: (seconds) => json("POST", "/api/show/seek", { seconds }),
+  patchClip: (id, payload) => json("PATCH", `/api/clips/${id}`, payload),
+  async uploadMedia(file) {
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch("/api/media", { method: "POST", body });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    return data;
+  },
 };
 
-export function connectSocket(onProject) {
+export function connectSocket(onMessage) {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
-    if (msg.type === "project") onProject(msg.payload);
+    onMessage(msg);
   };
   return ws;
 }

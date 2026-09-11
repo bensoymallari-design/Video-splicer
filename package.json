@@ -2,7 +2,7 @@
   "name": "video-splicer",
   "version": "1.0.0",
   "private": true,
-  "description": "Laptop IP control plane for NovaStar MCTRL4K and compatible LED controllers",
+  "description": "Watchout-inspired production desk with NovaStar IP control for LED controllers",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n api,web -c cyan,magenta \"node server/index.js\" \"vite --config web/vite.config.js\"",
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "express": "^5.1.0",
+    "multer": "^2.3.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
