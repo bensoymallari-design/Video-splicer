@@ -5,11 +5,13 @@ import { WebSocketServer } from "ws";
 import { createStore } from "./store.js";
 import { createSimulator } from "./simulator.js";
 import { probeTcp, sendCommand } from "./transport.js";
+import { eyeSaverBrightness, takeMap } from "./routing.js";
 import {
   INPUTS,
   MODELS,
   recallPreset,
   set3D,
+  set3DEye,
   setBlackout,
   setBrightness,
   setControllerMode,
@@ -17,6 +19,7 @@ import {
   setLayerSource,
   setLowLatency,
   setNormalDisplay,
+  setSendingCardDisplay,
 } from "./protocol.js";
 
 const PORT = Number(process.env.PORT) || 8787;
@@ -106,9 +109,6 @@ async function applyControllerCommand(controller, command) {
       controller.inputKey = key;
       break;
     }
-    case "preset":
-      await dispatch(controller, recallPreset(command.index));
-      break;
     case "lowLatency":
       await dispatch(controller, setLowLatency(Boolean(command.on)));
       controller.lowLatency = Boolean(command.on);
@@ -119,6 +119,35 @@ async function applyControllerCommand(controller, command) {
       break;
     case "controllerMode":
       await dispatch(controller, setControllerMode(command.mode));
+      break;
+    case "preset":
+    case "hardwarePreset": {
+      const index = Number(command.index) || 1;
+      await dispatch(controller, recallPreset(index));
+      controller.hardwarePreset = index;
+      break;
+    }
+    case "eye3d":
+      await dispatch(controller, set3DEye(command.eye === "left" ? "left" : "right"));
+      break;
+    case "sendingDisplay":
+      await dispatch(
+        controller,
+        setSendingCardDisplay(command.card || "all", command.mode || "normal"),
+      );
+      if (command.mode === "blackout") {
+        controller.display = "blackout";
+        controller.freeze = false;
+      } else if (command.mode === "freeze") {
+        controller.display = "freeze";
+        controller.freeze = true;
+      } else {
+        controller.display = "normal";
+        controller.freeze = false;
+      }
+      break;
+    case "testPattern":
+      controller.testPattern = Boolean(command.on);
       break;
     default:
       throw new Error(`Unknown command ${command.type}`);
@@ -197,6 +226,14 @@ app.get("/api/project", (_req, res) => {
   res.json(projectPayload());
 });
 
+app.use((req, res, next) => {
+  if (req.method === "GET") return next();
+  if (!store.project.locked) return next();
+  if (req.path === "/api/settings" && req.body?.locked === false) return next();
+  if (req.path.startsWith("/api/lab")) return next();
+  return res.status(423).json({ error: "Screen is locked" });
+});
+
 app.post("/api/controllers", async (req, res) => {
   try {
     const { host, port, name, model, transport } = req.body || {};
@@ -218,13 +255,24 @@ app.delete("/api/controllers/:id", async (req, res) => {
 app.patch("/api/controllers/:id", async (req, res) => {
   const controller = store.getController(req.params.id);
   if (!controller) return res.status(404).json({ error: "not found" });
-  const { name, viewport, host, port, model, brightness } = req.body || {};
+  const { name, viewport, host, port, model, brightness, backupId, edid } = req.body || {};
   if (name) controller.name = name;
   if (host) controller.host = host;
   if (port) controller.port = Number(port);
   if (model && MODELS[model]) controller.model = model;
   if (viewport) controller.viewport = { ...controller.viewport, ...viewport };
   if (Number.isFinite(brightness)) controller.brightness = brightness;
+  if (backupId !== undefined) controller.backupId = backupId || null;
+  if (edid) {
+    controller.edid = { ...controller.edid, ...edid };
+    if (edid.width && edid.height) {
+      controller.viewport = {
+        ...controller.viewport,
+        width: Number(edid.width),
+        height: Number(edid.height),
+      };
+    }
+  }
   res.json(await saveAndBroadcast());
 });
 
@@ -335,6 +383,89 @@ app.post("/api/master-brightness", async (req, res) => {
   store.project.masterBrightness = value;
   const results = await commandMany(null, { type: "brightness", value });
   res.json({ results, project: await saveAndBroadcast() });
+});
+
+app.post("/api/take", async (req, res) => {
+  const routes = takeMap(store.project);
+  const results = [];
+  for (const route of routes) {
+    try {
+      const controller = store.getController(route.controllerId);
+      await applyControllerCommand(controller, { type: "input", inputKey: route.inputKey });
+      results.push({ ...route, ok: true });
+    } catch (err) {
+      results.push({ ...route, ok: false, error: err.message });
+    }
+  }
+  res.json({ results, project: await saveAndBroadcast() });
+});
+
+app.post("/api/ftb", async (req, res) => {
+  const active = req.body?.active !== false;
+  store.project.ftb.active = active;
+  store.project.ftb.ms = Math.max(0, Number(req.body?.ms) || store.project.ftb.ms);
+  const results = await commandMany(null, { type: active ? "blackout" : "normal" });
+  res.json({ results, project: await saveAndBroadcast() });
+});
+
+app.post("/api/settings", async (req, res) => {
+  const body = req.body || {};
+  if (typeof body.locked === "boolean") store.project.locked = body.locked;
+  if (typeof body.eyeSaver === "boolean") {
+    store.project.eyeSaver = body.eyeSaver;
+    const value = body.eyeSaver
+      ? eyeSaverBrightness(store.project.masterBrightness)
+      : store.project.masterBrightness;
+    await commandMany(null, { type: "brightness", value });
+  }
+  if (body.color) store.project.color = { ...store.project.color, ...body.color };
+  if (body.osd) store.project.osd = { ...store.project.osd, ...body.osd };
+  if (body.canvas) store.project.canvas = { ...store.project.canvas, ...body.canvas };
+  if (Array.isArray(body.sources)) store.project.sources = body.sources;
+  if (body.playlist) store.project.playlist = { ...store.project.playlist, ...body.playlist };
+  if (body.name) store.project.name = body.name;
+  res.json(await saveAndBroadcast());
+});
+
+app.post("/api/playlist/add", async (req, res) => {
+  const id = req.body?.presetId || store.addPreset(req.body?.name).id;
+  if (!store.project.playlist.ids.includes(id)) store.project.playlist.ids.push(id);
+  res.json(await saveAndBroadcast());
+});
+
+app.post("/api/playlist/next", async (req, res) => {
+  const ids = store.project.playlist.ids;
+  if (!ids.length) return res.status(400).json({ error: "Playlist is empty" });
+  const cursor = (store.project.playlist.cursor + 1) % ids.length;
+  store.project.playlist.cursor = cursor;
+  const preset = store.applyPreset(ids[cursor]);
+  const results = [];
+  for (const controller of store.project.controllers) {
+    try {
+      await applyControllerCommand(controller, {
+        type: "input",
+        inputKey: controller.inputKey,
+      });
+      await applyControllerCommand(controller, {
+        type: "brightness",
+        value: Math.round((controller.brightness / 255) * 100),
+      });
+      results.push({ id: controller.id, ok: true });
+    } catch (err) {
+      results.push({ id: controller.id, ok: false, error: err.message });
+    }
+  }
+  res.json({ preset, results, project: await saveAndBroadcast() });
+});
+
+app.post("/api/project/import", async (req, res) => {
+  store.replace(req.body || {});
+  res.json(await saveAndBroadcast());
+});
+
+app.get("/api/project/export", (_req, res) => {
+  res.setHeader("Content-Disposition", "attachment; filename=lumen-splice-project.json");
+  res.json(store.snapshot());
 });
 
 const dist = path.join(process.cwd(), "web", "dist");

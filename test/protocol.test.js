@@ -172,6 +172,33 @@ describe("project store", () => {
     store.applyPreset(preset.id);
     assert.equal(store.getController(controller.id).brightness, 10);
   });
+
+  it("merges older project files with new screen fields", () => {
+    const store = createStore();
+    store.replace({ name: "Old", controllers: [], layers: [], presets: [] });
+    assert.equal(store.project.osd.enabled, false);
+    assert.equal(store.project.color.contrast, 100);
+    assert.equal(store.project.sources.length, 4);
+  });
+});
+
+describe("layer take routing", () => {
+  it("routes each sender from the top overlapping layer", async () => {
+    const { takeMap } = await import("../server/routing.js");
+    const project = {
+      controllers: [
+        { id: "a", inputKey: "HDMI", viewport: { x: 0, y: 0, width: 1920, height: 1080 } },
+        { id: "b", inputKey: "HDMI", viewport: { x: 1920, y: 0, width: 1920, height: 1080 } },
+      ],
+      layers: [
+        { id: "l1", visible: true, z: 1, source: "DP", x: 0, y: 0, width: 3840, height: 1080 },
+        { id: "l2", visible: true, z: 2, source: "DVI1", x: 1920, y: 0, width: 1920, height: 1080 },
+      ],
+    };
+    const routes = takeMap(project);
+    assert.equal(routes.find((r) => r.controllerId === "a").inputKey, "DP");
+    assert.equal(routes.find((r) => r.controllerId === "b").inputKey, "DVI1");
+  });
 });
 
 describe("packet parser", () => {

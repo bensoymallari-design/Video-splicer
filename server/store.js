@@ -1,20 +1,57 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { MODELS } from "./protocol.js";
+import { MODELS, INPUTS } from "./protocol.js";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const FILE = path.join(DATA_DIR, "project.json");
 
-function emptyProject() {
+export function defaultSources() {
+  return Object.entries(INPUTS).map(([key, value]) => ({
+    key,
+    label: value.label,
+  }));
+}
+
+export function emptyProject() {
   return {
     name: "Main wall",
     canvas: { width: 7680, height: 2160, background: "#05070b" },
     controllers: [],
     layers: [],
     presets: [],
+    sources: defaultSources(),
     masterBrightness: 80,
+    locked: false,
+    eyeSaver: false,
+    ftb: { active: false, ms: 400 },
+    color: { contrast: 100, saturation: 100, hue: 0, gamma: 1.0 },
+    osd: {
+      enabled: false,
+      text: "LUMEN SPLICE",
+      kind: "text",
+      position: "top",
+      speed: 40,
+    },
+    playlist: { ids: [], intervalSec: 8, running: false, cursor: 0 },
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function mergeProject(raw) {
+  const base = emptyProject();
+  return {
+    ...base,
+    ...raw,
+    canvas: { ...base.canvas, ...(raw.canvas || {}) },
+    color: { ...base.color, ...(raw.color || {}) },
+    osd: { ...base.osd, ...(raw.osd || {}) },
+    ftb: { ...base.ftb, ...(raw.ftb || {}) },
+    playlist: { ...base.playlist, ...(raw.playlist || {}) },
+    sources: Array.isArray(raw.sources) && raw.sources.length ? raw.sources : base.sources,
+    controllers: raw.controllers || [],
+    layers: raw.layers || [],
+    presets: raw.presets || [],
   };
 }
 
@@ -24,7 +61,7 @@ export function createStore() {
   async function load() {
     try {
       const raw = await fs.readFile(FILE, "utf8");
-      project = { ...emptyProject(), ...JSON.parse(raw) };
+      project = mergeProject(JSON.parse(raw));
     } catch {
       project = emptyProject();
     }
@@ -64,6 +101,11 @@ export function createStore() {
       lowLatency: false,
       mode3d: false,
       inputKey: "HDMI",
+      hardwarePreset: 1,
+      backupId: null,
+      testPattern: false,
+      edid: { width: tileW, height: tileH, refresh: 60 },
+      portsUp: spec.ethernetPorts,
       viewport: input.viewport || {
         x: (count % 4) * tileW,
         y: Math.floor(count / 4) * tileH,
@@ -83,8 +125,11 @@ export function createStore() {
     project.controllers = project.controllers.filter((c) => c.id !== id);
     project.layers = project.layers.map((layer) => ({
       ...layer,
-      controllerIds: layer.controllerIds.filter((cid) => cid !== id),
+      controllerIds: (layer.controllerIds || []).filter((cid) => cid !== id),
     }));
+    for (const controller of project.controllers) {
+      if (controller.backupId === id) controller.backupId = null;
+    }
   }
 
   function addLayer(input = {}) {
@@ -98,6 +143,8 @@ export function createStore() {
       source: input.source || "HDMI",
       visible: input.visible !== false,
       locked: false,
+      opacity: 100,
+      kind: input.kind || "video",
       z: project.layers.length + 1,
       controllerIds: input.controllerIds || project.controllers.map((c) => c.id),
     };
@@ -105,24 +152,33 @@ export function createStore() {
     return layer;
   }
 
+  function snapshotLooks() {
+    return {
+      canvas: structuredClone(project.canvas),
+      controllers: project.controllers.map((c) => ({
+        id: c.id,
+        brightness: c.brightness,
+        display: c.display,
+        freeze: c.freeze,
+        inputKey: c.inputKey,
+        viewport: { ...c.viewport },
+        hardwarePreset: c.hardwarePreset,
+        testPattern: c.testPattern,
+      })),
+      layers: structuredClone(project.layers),
+      masterBrightness: project.masterBrightness,
+      color: structuredClone(project.color),
+      osd: structuredClone(project.osd),
+      eyeSaver: project.eyeSaver,
+    };
+  }
+
   function addPreset(name) {
     const preset = {
       id: randomUUID(),
-      name: name || `Preset ${project.presets.length + 1}`,
+      name: name || `Look ${project.presets.length + 1}`,
       savedAt: new Date().toISOString(),
-      snapshot: {
-        canvas: structuredClone(project.canvas),
-        controllers: project.controllers.map((c) => ({
-          id: c.id,
-          brightness: c.brightness,
-          display: c.display,
-          freeze: c.freeze,
-          inputKey: c.inputKey,
-          viewport: { ...c.viewport },
-        })),
-        layers: structuredClone(project.layers),
-        masterBrightness: project.masterBrightness,
-      },
+      snapshot: snapshotLooks(),
     };
     project.presets.push(preset);
     return preset;
@@ -135,6 +191,9 @@ export function createStore() {
     project.canvas = { ...project.canvas, ...snap.canvas };
     project.masterBrightness = snap.masterBrightness;
     project.layers = structuredClone(snap.layers || []);
+    if (snap.color) project.color = { ...project.color, ...snap.color };
+    if (snap.osd) project.osd = { ...project.osd, ...snap.osd };
+    if (typeof snap.eyeSaver === "boolean") project.eyeSaver = snap.eyeSaver;
     for (const saved of snap.controllers || []) {
       const live = project.controllers.find((c) => c.id === saved.id);
       if (!live) continue;
@@ -143,6 +202,8 @@ export function createStore() {
       live.freeze = saved.freeze;
       live.inputKey = saved.inputKey;
       live.viewport = { ...saved.viewport };
+      if (saved.hardwarePreset) live.hardwarePreset = saved.hardwarePreset;
+      if (typeof saved.testPattern === "boolean") live.testPattern = saved.testPattern;
     }
     return preset;
   }
@@ -180,11 +241,20 @@ export function createStore() {
         width,
         height,
       };
+      controller.edid = { width, height, refresh: controller.edid?.refresh || 60 };
     });
   }
 
   function replace(next) {
-    project = { ...emptyProject(), ...next };
+    project = mergeProject(next);
+  }
+
+  function assertUnlocked() {
+    if (project.locked) {
+      const err = new Error("Screen is locked");
+      err.status = 423;
+      throw err;
+    }
   }
 
   return {
@@ -199,6 +269,7 @@ export function createStore() {
     applyPreset,
     autoLayout,
     replace,
+    assertUnlocked,
     get project() {
       return project;
     },
