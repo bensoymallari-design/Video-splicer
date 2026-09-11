@@ -316,9 +316,34 @@ button, input, select {
   padding: 10px 12px;
   border-radius: 8px;
   min-width: 140px;
+  display: flex;
+  align-items: stretch;
+  text-align: left;
+  cursor: pointer;
+}
+.chip.on { outline: 1px solid var(--violet); }
+.chip.layer-chip { padding: 0; cursor: default; }
+.chip-main {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  padding: 10px 12px;
   cursor: pointer;
   text-align: left;
 }
+.chip-main b { display: block; font-size: 12px; }
+.chip-main span { color: var(--muted); font-size: 11px; }
+.chip-del {
+  width: 32px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--red);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+.chip-del:hover { background: #2a1518; }
 .chip b { display: block; font-size: 12px; }
 .chip span { color: var(--muted); font-size: 11px; }
 
