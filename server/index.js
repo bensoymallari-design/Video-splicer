@@ -503,7 +503,6 @@ app.post("/api/media", upload.single("file"), async (req, res) => {
     kind,
     filename: req.file.filename,
   });
-  store.addClip({ mediaId: item.id });
   res.json({ media: item, project: await saveAndBroadcast() });
 });
 
@@ -545,6 +544,23 @@ app.post("/api/show/stop", (_req, res) => {
   const clock = show.stop();
   broadcastClock();
   res.json({ show: clock });
+});
+
+app.post("/api/show/seek", (_req, res) => {
+  const clock = show.seek(_req.body?.seconds);
+  broadcastClock();
+  res.json({ show: clock });
+});
+
+app.patch("/api/clips/:id", async (req, res) => {
+  const clip = store.project.clips.find((item) => item.id === req.params.id);
+  if (!clip) return res.status(404).json({ error: "not found" });
+  const body = req.body || {};
+  const allowed = ["name", "x", "y", "width", "height", "z", "start", "duration", "mediaId"];
+  for (const key of allowed) {
+    if (body[key] !== undefined) clip[key] = body[key];
+  }
+  res.json(await saveAndBroadcast());
 });
 
 const dist = path.join(process.cwd(), "web", "dist");

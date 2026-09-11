@@ -25,9 +25,10 @@ export default function Output({ controllerId }) {
   }, []);
 
   useEffect(() => {
-    for (const video of videos.current.values()) {
+    for (const [id, video] of videos.current) {
       if (!video) continue;
-      const t = clock.mediaTime || 0;
+      const clip = project?.clips?.find((item) => item.id === id);
+      const t = Math.max(0, (clock.mediaTime || 0) - (clip?.start || 0));
       if (Number.isFinite(video.duration) && video.duration > 0) {
         const target = clock.loop ? t % video.duration : Math.min(t, video.duration);
         if (Math.abs(video.currentTime - target) > 0.35) video.currentTime = target;
@@ -35,9 +36,9 @@ export default function Output({ controllerId }) {
       if (clock.playing) video.play().catch(() => {});
       else video.pause();
     }
-  }, [clock]);
+  }, [clock, project]);
 
-  const controller = project?.controllers.find((c) => c.id === controllerId);
+  const controller = project?.controllers?.find((c) => c.id === controllerId);
   const layout = useMemo(() => {
     if (!project || !controller) return null;
     const vp = controller.viewport;

@@ -1,971 +1,782 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { api, connectSocket } from "./api.js";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "./api.js";
 
-const LAYOUTS = [
-  { id: "1xN", label: "1 × N" },
-  { id: "Nx1", label: "N × 1" },
-  { id: "2x2", label: "2 × 2" },
-  { id: "2x3", label: "2 × 3" },
-  { id: "auto", label: "Auto" },
-];
-
-function pixels(controller) {
-  return controller.viewport.width * controller.viewport.height;
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n));
 }
 
-function capacityWarning(controller, models) {
-  const spec = models?.[controller.model];
-  if (!spec) return null;
-  if (pixels(controller) > spec.maxPixels) {
-    return `Viewport exceeds ${spec.label} loading (${spec.maxPixels.toLocaleString()} px).`;
-  }
-  if (controller.viewport.width > spec.maxWidth || controller.viewport.height > spec.maxHeight) {
-    return `Width/height exceeds ${spec.label} max ${spec.maxWidth}×${spec.maxHeight}.`;
-  }
-  return null;
+function formatTime(s) {
+  const n = Math.max(0, Number(s) || 0);
+  const m = Math.floor(n / 60);
+  const r = (n - m * 60).toFixed(2).padStart(5, "0");
+  return `${m}:${r}`;
 }
 
-function displayLabel(controller) {
-  if (controller.display === "blackout") return "BLACK";
-  if (controller.freeze || controller.display === "freeze") return "FREEZE";
-  return "LIVE";
-}
-
-function sourceLabel(project, key) {
-  return project.sources?.find((item) => item.key === key)?.label || key;
+function brightnessPct(controller) {
+  return Math.round(((controller?.brightness ?? 0) / 255) * 100);
 }
 
 export default function App() {
   const [project, setProject] = useState(null);
-  const [selectedId, setSelectedId] = useState(null);
-  const [selectedLayer, setSelectedLayer] = useState(null);
-  const [tab, setTab] = useState("sender");
-  const [modal, setModal] = useState(false);
+  const [show, setShow] = useState({ playing: false, loop: true, mediaTime: 0 });
+  const [playhead, setPlayhead] = useState(0);
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [clock, setClock] = useState({ playing: false, mediaTime: 0, loop: true });
-  const [form, setForm] = useState({
-    host: "192.168.0.10",
-    port: 5200,
-    name: "",
-    model: "MCTRL4K",
-    transport: "tcp",
-  });
+  const [selectedClipId, setSelectedClipId] = useState(null);
+  const [selectedDisplayId, setSelectedDisplayId] = useState(null);
+  const [ip, setIp] = useState("192.168.1.10");
+  const [zoom, setZoom] = useState(0.12);
+  const [drag, setDrag] = useState(null);
+  const fileRef = useRef(null);
+  const stageRef = useRef(null);
+  const timelineRef = useRef(null);
+  const videosRef = useRef(new Map());
+  const projectRef = useRef(null);
+
+  const refresh = useCallback(async () => {
+    const data = await api.project();
+    setProject(data);
+    projectRef.current = data;
+    if (data.show) {
+      setShow(data.show);
+      setPlayhead(data.show.mediaTime || 0);
+    }
+  }, []);
 
   useEffect(() => {
-    api.project().then(setProject).catch((err) => setToast(err.message));
-    const ws = connectSocket((msg) => {
-      if (msg.type === "project") setProject(msg.payload);
-      if (msg.type === "clock") setClock(msg.payload);
-    });
+    refresh().catch((err) => setError(err.message));
+  }, [refresh]);
+
+  useEffect(() => {
+    const ws = new WebSocket(
+      `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`,
+    );
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === "project") {
+        setProject(msg.payload);
+        projectRef.current = msg.payload;
+        if (msg.payload?.show) setShow(msg.payload.show);
+      }
+      if (msg.type === "clock") {
+        setShow(msg.payload);
+        setPlayhead(msg.payload.mediaTime || 0);
+      }
+    };
     return () => ws.close();
   }, []);
 
   useEffect(() => {
-    if (!project?.controllers.length) {
-      if (selectedId) setSelectedId(null);
-      return;
-    }
-    if (!project.controllers.some((c) => c.id === selectedId)) {
-      setSelectedId(project.controllers[0].id);
-    }
-  }, [project, selectedId]);
+    if (!show.playing) return undefined;
+    const origin = performance.now();
+    const base = show.mediaTime || 0;
+    let id = 0;
+    const tick = () => {
+      setPlayhead(base + (performance.now() - origin) / 1000);
+      id = requestAnimationFrame(tick);
+    };
+    id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+  }, [show.playing, show.mediaTime]);
 
   useEffect(() => {
-    if (!project?.playlist?.running) return undefined;
-    const timer = setInterval(() => {
-      api.playlistNext().then((result) => result.project && setProject(result.project)).catch(() => {});
-    }, (project.playlist.intervalSec || 8) * 1000);
-    return () => clearInterval(timer);
-  }, [project?.playlist?.running, project?.playlist?.intervalSec]);
+    const clips = project?.clips || [];
+    for (const [id, video] of videosRef.current) {
+      if (!video) continue;
+      const clip = clips.find((item) => item.id === id);
+      const start = clip?.start || 0;
+      const local = Math.max(0, playhead - start);
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      const target =
+        duration > 0 ? (show.loop ? local % duration : Math.min(local, duration)) : local;
+      if (Number.isFinite(target) && Math.abs(video.currentTime - target) > 0.3) {
+        video.currentTime = target;
+      }
+      if (show.playing && local >= 0) video.play().catch(() => {});
+      else video.pause();
+    }
+  }, [playhead, project, show.loop, show.playing]);
 
-  const selected = project?.controllers.find((c) => c.id === selectedId) || null;
-  const layer = project?.layers.find((item) => item.id === selectedLayer) || null;
+  useEffect(() => {
+    const onMove = (event) => {
+      if (!drag || !stageRef.current) return;
+      const rect = stageRef.current.getBoundingClientRect();
+      const x = (event.clientX - rect.left) / zoom - drag.ox;
+      const y = (event.clientY - rect.top) / zoom - drag.oy;
+      setProject((prev) => {
+        if (!prev) return prev;
+        if (drag.kind === "clip") {
+          const next = {
+            ...prev,
+            clips: prev.clips.map((clip) =>
+              clip.id === drag.id
+                ? { ...clip, x: Math.round(x), y: Math.round(y) }
+                : clip,
+            ),
+          };
+          projectRef.current = next;
+          return next;
+        }
+        if (drag.kind === "clip-resize") {
+          const next = {
+            ...prev,
+            clips: prev.clips.map((clip) =>
+              clip.id === drag.id
+                ? {
+                    ...clip,
+                    width: Math.max(160, Math.round(x - clip.x)),
+                    height: Math.max(90, Math.round(y - clip.y)),
+                  }
+                : clip,
+            ),
+          };
+          projectRef.current = next;
+          return next;
+        }
+        if (drag.kind === "display") {
+          const next = {
+            ...prev,
+            controllers: prev.controllers.map((controller) =>
+              controller.id === drag.id
+                ? {
+                    ...controller,
+                    viewport: {
+                      ...controller.viewport,
+                      x: Math.round(x),
+                      y: Math.round(y),
+                    },
+                  }
+                : controller,
+            ),
+          };
+          projectRef.current = next;
+          return next;
+        }
+        if (drag.kind === "display-resize") {
+          const next = {
+            ...prev,
+            controllers: prev.controllers.map((controller) => {
+              if (controller.id !== drag.id) return controller;
+              return {
+                ...controller,
+                viewport: {
+                  ...controller.viewport,
+                  width: Math.max(320, Math.round(x - controller.viewport.x)),
+                  height: Math.max(180, Math.round(y - controller.viewport.y)),
+                },
+              };
+            }),
+          };
+          projectRef.current = next;
+          return next;
+        }
+        return prev;
+      });
+    };
+    const onUp = async () => {
+      if (!drag) return;
+      const current = drag;
+      setDrag(null);
+      const latest = projectRef.current;
+      if (!latest) return;
+      try {
+        if (current.kind === "clip" || current.kind === "clip-resize") {
+          const clip = latest.clips.find((item) => item.id === current.id);
+          if (clip) {
+            await api.patchClip(clip.id, {
+              x: clip.x,
+              y: clip.y,
+              width: clip.width,
+              height: clip.height,
+            });
+          }
+        }
+        if (current.kind === "display" || current.kind === "display-resize") {
+          const controller = latest.controllers.find((item) => item.id === current.id);
+          if (controller) {
+            await api.patchController(controller.id, { viewport: controller.viewport });
+          }
+        }
+      } catch (err) {
+        setError(err.message);
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [drag, zoom]);
 
-  async function run(fn, success) {
+  async function run(label, fn) {
     setBusy(true);
+    setError("");
     try {
-      const result = await fn();
-      if (result?.project) setProject(result.project);
-      else if (result?.controllers) setProject(result);
-      if (success) setToast(success);
-      return result;
+      await fn();
+      await refresh();
     } catch (err) {
-      setToast(err.message);
+      setError(`${label}: ${err.message}`);
     } finally {
       setBusy(false);
     }
   }
 
-  async function deleteLayer(id) {
-    await run(async () => {
-      const result = await api.removeLayer(id);
-      setSelectedLayer((current) => (current === id ? null : current));
-      return result;
-    }, "Layer removed");
-  }
-
-  async function startLab(count) {
-    const result = await run(() => api.startLab(count), `Lab started with ${count} MCTRL4K simulators`);
-    if (result?.controllers?.[0]) setSelectedId(result.controllers[0].id);
-  }
-
-  function importFile(file) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        run(() => api.importProject(JSON.parse(reader.result)), "Project imported");
-      } catch (err) {
-        setToast(err.message);
-      }
+  function stagePoint(event, originX = 0, originY = 0) {
+    const rect = stageRef.current.getBoundingClientRect();
+    return {
+      ox: (event.clientX - rect.left) / zoom - originX,
+      oy: (event.clientY - rect.top) / zoom - originY,
     };
-    reader.readAsText(file);
   }
+
+  function onClipPointerDown(event, clip) {
+    event.stopPropagation();
+    setSelectedClipId(clip.id);
+    setSelectedDisplayId(null);
+    setDrag({ kind: "clip", id: clip.id, ...stagePoint(event, clip.x, clip.y) });
+  }
+
+  async function onClipLoaded(clip, media) {
+    const duration = Number.isFinite(media.duration) && media.duration > 0 ? media.duration : 0;
+    if (duration && duration !== clip.duration) {
+      await api.patchClip(clip.id, { duration });
+    }
+  }
+
+  async function seekFromTimeline(event) {
+    const el = timelineRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const t = ((event.clientX - rect.left) / rect.width) * timelineDuration;
+    await api.showSeek(Math.max(0, t));
+  }
+
+  const canvas = project?.canvas || { width: 7680, height: 2160 };
+  const controllers = project?.controllers || [];
+  const clips = project?.clips || [];
+  const media = project?.media || [];
+  const selectedClip = clips.find((clip) => clip.id === selectedClipId);
+  const selectedDisplay = controllers.find((controller) => controller.id === selectedDisplayId);
+  const timelineDuration = Math.max(
+    30,
+    ...clips.map((clip) => (clip.start || 0) + (clip.duration || 10)),
+  );
+  const wrappedHead = show.loop ? playhead % timelineDuration : playhead;
+  const playheadPct = clamp((wrappedHead / timelineDuration) * 100, 0, 100);
 
   if (!project) {
-    return <div className="empty">Starting control desk…</div>;
+    return <div className="boot">Opening production…</div>;
   }
 
-  const locked = project.locked;
-
   return (
-    <div className={`app ${locked ? "is-locked" : ""} ${project.eyeSaver ? "eye-saver" : ""}`}>
-      <header className="topbar">
-        <div className="brand">
-          <svg className="logo" viewBox="0 0 34 34" aria-hidden="true">
-            <rect width="34" height="34" rx="8" fill="#121821" />
-            <rect x="5" y="7" width="11" height="8" fill="#e8a23a" />
-            <rect x="18" y="7" width="11" height="8" fill="#3dd68c" />
-            <rect x="5" y="18" width="24" height="9" fill="#4aa3ff" />
-          </svg>
-          <div>
-            <h1>Lumen Splice</h1>
-            <small>{project.name}</small>
-          </div>
+    <div className="wo">
+      <header className="wo-top">
+        <div className="wo-brand">
+          <strong>Lumen Splice</strong>
+          <span>Watchout production</span>
         </div>
-        <div className="master">
-          <label>Master</label>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            disabled={locked}
-            value={project.masterBrightness}
-            onChange={(e) =>
-              setProject({ ...project, masterBrightness: Number(e.target.value) })
+        <div className="wo-transport">
+          <button
+            className="go"
+            disabled={busy}
+            onClick={() => run("Go", () => api.showPlay())}
+          >
+            GO
+          </button>
+          <button disabled={busy} onClick={() => run("Play", () => api.showPlay())}>
+            ▶ Play
+          </button>
+          <button disabled={busy} onClick={() => run("Pause", () => api.showPause())}>
+            ⏸ Pause
+          </button>
+          <button disabled={busy} onClick={() => run("Stop", () => api.showStop())}>
+            ■ Stop
+          </button>
+          <span className="wo-clock">{formatTime(wrappedHead)}</span>
+          <span className={`wo-state ${show.playing ? "live" : ""}`}>
+            {show.playing ? "PLAYING" : wrappedHead > 0 ? "PAUSED" : "STOPPED"}
+          </span>
+        </div>
+        <div className="wo-top-actions">
+          <label>
+            Stage zoom
+            <input
+              type="range"
+              min="0.04"
+              max="0.28"
+              step="0.01"
+              value={zoom}
+              onChange={(e) => setZoom(Number(e.target.value))}
+            />
+          </label>
+          <button
+            disabled={busy || !controllers.length}
+            onClick={() =>
+              controllers.forEach((controller) =>
+                window.open(
+                  `/output/${controller.id}`,
+                  `out-${controller.id}`,
+                  "popup,width=1280,height=720",
+                ),
+              )
             }
-            onMouseUp={(e) => run(() => api.masterBrightness(Number(e.target.value)))}
-            onTouchEnd={(e) => run(() => api.masterBrightness(Number(e.target.value)))}
-          />
-          <span className="pct">{project.masterBrightness}%</span>
-        </div>
-        <div className="actions">
-          <button className="btn primary" disabled={busy || locked} onClick={() => run(() => api.take(), "Take sent to senders")}>
-            Take
-          </button>
-          <button className="btn" disabled={busy || locked} onClick={() => run(() => api.ftb({ active: false }), "Live")}>
-            Live
-          </button>
-          <button className="btn" disabled={busy || locked} onClick={() => run(() => api.group({ command: { type: "freeze" } }))}>
-            Freeze
-          </button>
-          <button className="btn danger" disabled={busy || locked} onClick={() => run(() => api.ftb({ active: true }), "FTB")}>
-            FTB
-          </button>
-          <button className="btn" disabled={busy} onClick={() => run(() => api.settings({ locked: !locked }))}>
-            {locked ? "Unlock" : "Lock"}
-          </button>
-          <button className="btn primary" disabled={busy} onClick={() => startLab(4)}>
-            Lab 4×
+          >
+            Open display windows
           </button>
         </div>
       </header>
 
-      <ShowBar
-        project={project}
-        clock={clock}
-        busy={busy}
-        locked={locked}
-        onRun={run}
-        onToast={setToast}
-      />
+      {error ? <div className="wo-error">{error}</div> : null}
 
-      <main className="workspace">
-        <aside className="side">
-          <div className="section-h">
-            Controllers
-            <span>{project.controllers.length}</span>
-          </div>
-          <div className="row">
-            <button className="btn primary" disabled={locked} onClick={() => setModal(true)}>Add by IP</button>
-            <button className="btn" disabled={busy} onClick={() => startLab(6)}>Lab 6</button>
-            {project.lab?.running ? (
-              <button className="btn danger" onClick={() => run(() => api.stopLab(), "Lab stopped")}>Stop lab</button>
-            ) : null}
-          </div>
-          {!project.controllers.length ? (
-            <div className="empty">
-              Add MCTRL4K units by IP, or start a local lab. Take applies layer sources to overlapping senders over IP.
-            </div>
-          ) : (
-            <div className="card-list">
-              {project.controllers.map((controller) => (
-                <article
-                  key={controller.id}
-                  className={`device ${selectedId === controller.id ? "selected" : ""}`}
-                  onClick={() => { setSelectedId(controller.id); setTab("sender"); }}
-                >
-                  <div className="device-top">
-                    <h3>
-                      <span className={`led ${controller.online ? "on" : "off"}`} />
-                      {controller.name}
-                    </h3>
-                    <span>{displayLabel(controller)}</span>
-                  </div>
-                  <div className="ip">{controller.host}:{controller.port}</div>
-                  <div className="meta">
-                    <span>{sourceLabel(project, controller.inputKey)}</span>
-                    <span>{Math.round((controller.brightness / 255) * 100)}%</span>
-                    {controller.backupId ? <span>BKP</span> : null}
-                    {controller.simulated ? <span>SIM</span> : null}
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
+      <div className="wo-body">
+        <aside className="wo-bin">
+          <h2>Media</h2>
+          <p className="hint">Load files into the bin, then add cues to the stage.</p>
+          <input
+            ref={fileRef}
+            type="file"
+            hidden
+            multiple
+            accept="video/*,image/*"
+            onChange={(e) => {
+              const files = [...(e.target.files || [])];
+              e.target.value = "";
+              if (!files.length) return;
+              run("Load media", async () => {
+                for (const file of files) await api.uploadMedia(file);
+              });
+            }}
+          />
+          <button disabled={busy} onClick={() => fileRef.current?.click()}>
+            Load media…
+          </button>
+          <ul className="media-list">
+            {media.map((item) => (
+              <li key={item.id}>
+                <div>
+                  <strong>{item.name}</strong>
+                  <span>{item.kind}</span>
+                </div>
+                <div className="row-inline">
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      run("Add cue", () =>
+                        api.addClip({
+                          mediaId: item.id,
+                          x: 120 + clips.length * 40,
+                          y: 120 + clips.length * 24,
+                        }),
+                      )
+                    }
+                  >
+                    + Stage
+                  </button>
+                  <button
+                    className="danger"
+                    disabled={busy}
+                    onClick={() => run("Remove media", () => api.removeMedia(item.id))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {media.length === 0 ? <p className="empty">No media loaded.</p> : null}
         </aside>
 
-        <CanvasBoard
-          project={project}
-          selectedId={selectedId}
-          selectedLayer={selectedLayer}
-          onSelect={(id) => { setSelectedId(id); setTab("sender"); }}
-          onSelectLayer={(id) => { setSelectedLayer(id); setTab("layer"); }}
-          onMove={(id, viewport) => {
-            setProject({
-              ...project,
-              controllers: project.controllers.map((c) =>
-                c.id === id ? { ...c, viewport } : c,
-              ),
-            });
-          }}
-          onMoveEnd={(id, viewport) => run(() => api.patchController(id, { viewport }))}
-          onMoveLayer={(id, box) => {
-            setProject({
-              ...project,
-              layers: project.layers.map((item) => (item.id === id ? { ...item, ...box } : item)),
-            });
-          }}
-          onMoveLayerEnd={(id, box) => run(() => api.patchLayer(id, box))}
-          clock={clock}
-        />
+        <main className="wo-stage-wrap">
+          <div className="wo-stage-label">
+            Stage · {canvas.width} × {canvas.height} px · cues play here, displays crop their
+            viewports
+          </div>
+          <div
+            className="wo-stage"
+            ref={stageRef}
+            onPointerDown={() => {
+              setSelectedClipId(null);
+              setSelectedDisplayId(null);
+            }}
+          >
+            <div
+              className="wo-stage-inner"
+              style={{
+                width: canvas.width * zoom,
+                height: canvas.height * zoom,
+              }}
+            >
+              {clips.map((clip) => {
+                const item = media.find((entry) => entry.id === clip.mediaId);
+                if (!item) return null;
+                return (
+                  <div
+                    key={clip.id}
+                    className={`wo-clip ${selectedClipId === clip.id ? "sel" : ""}`}
+                    style={{
+                      left: clip.x * zoom,
+                      top: clip.y * zoom,
+                      width: clip.width * zoom,
+                      height: clip.height * zoom,
+                      zIndex: 2 + (clip.z || 0),
+                    }}
+                    onPointerDown={(event) => onClipPointerDown(event, clip)}
+                  >
+                    {item.kind === "video" ? (
+                      <video
+                        src={item.url}
+                        muted
+                        playsInline
+                        onLoadedMetadata={(event) => onClipLoaded(clip, event.currentTarget)}
+                        ref={(node) => {
+                          if (node) videosRef.current.set(clip.id, node);
+                          else videosRef.current.delete(clip.id);
+                        }}
+                      />
+                    ) : (
+                      <img
+                        src={item.url}
+                        alt={clip.name}
+                        onLoad={(event) => onClipLoaded(clip, event.currentTarget)}
+                      />
+                    )}
+                    <span>{clip.name}</span>
+                    <i
+                      className="wo-handle"
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                        setSelectedClipId(clip.id);
+                        setDrag({
+                          kind: "clip-resize",
+                          id: clip.id,
+                          ...stagePoint(event, 0, 0),
+                        });
+                      }}
+                    />
+                  </div>
+                );
+              })}
+              {controllers.map((controller) => (
+                <div
+                  key={controller.id}
+                  className={`wo-display ${selectedDisplayId === controller.id ? "sel" : ""} ${controller.online ? "on" : "off"}`}
+                  style={{
+                    left: controller.viewport.x * zoom,
+                    top: controller.viewport.y * zoom,
+                    width: controller.viewport.width * zoom,
+                    height: controller.viewport.height * zoom,
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="wo-display-label"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      setSelectedDisplayId(controller.id);
+                      setSelectedClipId(null);
+                      setDrag({
+                        kind: "display",
+                        id: controller.id,
+                        ...stagePoint(event, controller.viewport.x, controller.viewport.y),
+                      });
+                    }}
+                  >
+                    <b>{controller.name}</b>
+                    <small>
+                      {controller.host}:{controller.port} · {controller.viewport.width}×
+                      {controller.viewport.height}
+                    </small>
+                  </button>
+                  <i
+                    className="wo-handle"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      setSelectedDisplayId(controller.id);
+                      setDrag({
+                        kind: "display-resize",
+                        id: controller.id,
+                        ...stagePoint(event, 0, 0),
+                      });
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        </main>
 
-        <Inspector
-          tab={tab}
-          setTab={setTab}
-          project={project}
-          selected={selected}
-          layer={layer}
-          busy={busy}
-          locked={locked}
-          onCommand={(type, extra) =>
-            selected && run(() => api.command(selected.id, { type, ...extra }))
-          }
-          onRoute={(id, inputKey) => run(() => api.command(id, { type: "input", inputKey }))}
-          onProbe={() => selected && run(() => api.probe(selected.id))}
-          onRemove={() =>
-            selected &&
-            run(async () => {
-              const result = await api.removeController(selected.id);
-              setSelectedId(null);
-              return result;
-            }, "Controller removed")
-          }
-          onPatch={(payload) => selected && run(() => api.patchController(selected.id, payload))}
-          onPatchLayer={(payload) => layer && run(() => api.patchLayer(layer.id, payload))}
-          onSettings={(payload) => run(() => api.settings(payload))}
-          onDeleteLayer={() => layer && deleteLayer(layer.id)}
-          onImport={importFile}
-          onPreviewBrightness={(value) => {
-            setProject((current) => ({
-              ...current,
-              controllers: current.controllers.map((item) =>
-                item.id === selectedId
-                  ? { ...item, brightness: Math.round((value / 100) * 255) }
-                  : item,
-              ),
-            }));
-          }}
-        />
-      </main>
-
-      <footer className="dock">
-        <div className="dock-col">
-          <div className="section-h">
-            Layers
-            <span className="section-actions">
-              <button
-                className="btn ghost"
-                disabled={locked}
-                onClick={() =>
-                  run(async () => {
-                    const result = await api.addLayer({ name: `Layer ${project.layers.length + 1}` });
-                    if (result.layer?.id) {
-                      setSelectedLayer(result.layer.id);
-                      setTab("layer");
+        <aside className="wo-inspector">
+          {selectedClip ? (
+            <>
+              <h2>Cue</h2>
+              <label>
+                Name
+                <input
+                  value={selectedClip.name}
+                  onChange={(event) =>
+                    setProject((prev) => ({
+                      ...prev,
+                      clips: prev.clips.map((clip) =>
+                        clip.id === selectedClip.id
+                          ? { ...clip, name: event.target.value }
+                          : clip,
+                      ),
+                    }))
+                  }
+                  onBlur={() => api.patchClip(selectedClip.id, { name: selectedClip.name })}
+                />
+              </label>
+              {["x", "y", "width", "height", "start", "duration"].map((key) => (
+                <label key={key}>
+                  {key}
+                  <input
+                    type="number"
+                    step={key === "start" || key === "duration" ? "0.01" : "1"}
+                    value={selectedClip[key] ?? 0}
+                    onChange={(event) => {
+                      const n = Number(event.target.value);
+                      setProject((prev) => ({
+                        ...prev,
+                        clips: prev.clips.map((clip) =>
+                          clip.id === selectedClip.id ? { ...clip, [key]: n } : clip,
+                        ),
+                      }));
+                    }}
+                    onBlur={() =>
+                      api.patchClip(selectedClip.id, { [key]: selectedClip[key] })
                     }
-                    return result;
+                  />
+                </label>
+              ))}
+              <button
+                className="danger"
+                disabled={busy}
+                onClick={() =>
+                  run("Delete cue", async () => {
+                    await api.removeClip(selectedClip.id);
+                    setSelectedClipId(null);
                   })
                 }
               >
-                Add layer
+                Delete cue
               </button>
-              <button
-                className="btn danger"
-                disabled={locked || !selectedLayer}
-                onClick={() => selectedLayer && deleteLayer(selectedLayer)}
-              >
-                Delete layer
-              </button>
-            </span>
-          </div>
-          <div className="chips">
-            {project.layers.map((item) => (
-              <div
-                key={item.id}
-                className={`chip layer-chip ${selectedLayer === item.id ? "on" : ""}`}
-                style={{ opacity: item.visible === false ? 0.45 : 1 }}
-              >
+            </>
+          ) : selectedDisplay ? (
+            <>
+              <h2>Display</h2>
+              <p className="hint">
+                Open a window for this display and drag it onto the screen cabled into this
+                sender. IP below is NovaStar control only — not video.
+              </p>
+              <div className="kv">
+                <span>Name</span>
+                <strong>{selectedDisplay.name}</strong>
+                <span>Host</span>
+                <strong>
+                  {selectedDisplay.host}:{selectedDisplay.port}
+                </strong>
+                <span>Viewport</span>
+                <strong>
+                  {selectedDisplay.viewport.width}×{selectedDisplay.viewport.height} @{" "}
+                  {selectedDisplay.viewport.x},{selectedDisplay.viewport.y}
+                </strong>
+                <span>Online</span>
+                <strong>{selectedDisplay.online ? "yes" : "no"}</strong>
+              </div>
+              {["x", "y", "width", "height"].map((key) => (
+                <label key={key}>
+                  Viewport {key}
+                  <input
+                    type="number"
+                    value={selectedDisplay.viewport[key]}
+                    onChange={(event) => {
+                      const n = Number(event.target.value);
+                      setProject((prev) => ({
+                        ...prev,
+                        controllers: prev.controllers.map((controller) =>
+                          controller.id === selectedDisplay.id
+                            ? {
+                                ...controller,
+                                viewport: { ...controller.viewport, [key]: n },
+                              }
+                            : controller,
+                        ),
+                      }));
+                    }}
+                    onBlur={() =>
+                      api.patchController(selectedDisplay.id, {
+                        viewport: selectedDisplay.viewport,
+                      })
+                    }
+                  />
+                </label>
+              ))}
+              <label>
+                Brightness {brightnessPct(selectedDisplay)}%
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={brightnessPct(selectedDisplay)}
+                  onChange={(event) =>
+                    api.command(selectedDisplay.id, {
+                      type: "brightness",
+                      value: Number(event.target.value),
+                    })
+                  }
+                />
+              </label>
+              <div className="row">
                 <button
-                  type="button"
-                  className="chip-main"
-                  onClick={() => { setSelectedLayer(item.id); setTab("layer"); }}
+                  disabled={busy}
+                  onClick={() =>
+                    run("Freeze", () =>
+                      api.command(selectedDisplay.id, {
+                        type: selectedDisplay.freeze ? "unfreeze" : "freeze",
+                      }),
+                    )
+                  }
                 >
-                  <b>{item.name}</b>
-                  <span>{item.width}×{item.height} · {sourceLabel(project, item.source)}</span>
+                  {selectedDisplay.freeze ? "Unfreeze" : "Freeze"}
                 </button>
                 <button
-                  type="button"
-                  className="chip-del"
-                  title="Remove layer"
-                  disabled={locked}
-                  onClick={() => deleteLayer(item.id)}
+                  disabled={busy}
+                  onClick={() =>
+                    run("Black", () =>
+                      api.command(selectedDisplay.id, {
+                        type: selectedDisplay.display === "blackout" ? "normal" : "blackout",
+                      }),
+                    )
+                  }
                 >
-                  Delete
+                  {selectedDisplay.display === "blackout" ? "Unblack" : "Black"}
+                </button>
+                <button
+                  onClick={() =>
+                    window.open(
+                      `/output/${selectedDisplay.id}`,
+                      `out-${selectedDisplay.id}`,
+                      "popup,width=1280,height=720",
+                    )
+                  }
+                >
+                  Open window
                 </button>
               </div>
-            ))}
-            {!project.layers.length ? <span className="empty">No layers yet. Layers are control routing only — they do not carry Resolume video.</span> : null}
-          </div>
-        </div>
-        <div className="dock-col">
-          <div className="section-h">
-            Looks / playlist
-            <span>
-              <button className="btn ghost" disabled={locked} onClick={() => run(() => api.addPreset(`Look ${project.presets.length + 1}`), "Look saved")}>
-                Save look
-              </button>
-              <button className="btn ghost" disabled={locked || !project.presets.length} onClick={() => run(() => api.playlistAdd({}), "Added to playlist")}>
-                + Playlist
-              </button>
-            </span>
-          </div>
-          <div className="chips">
-            {LAYOUTS.map((layout) => (
-              <button key={layout.id} className="chip" disabled={locked} onClick={() => run(() => api.layout({ pattern: layout.id }))}>
-                <b>{layout.label}</b>
-                <span>Tile senders</span>
-              </button>
-            ))}
-            {project.presets.map((preset) => (
-              <button key={preset.id} className="chip" disabled={locked} onClick={() => run(() => api.applyPreset(preset.id), `Loaded ${preset.name}`)}>
-                <b>{preset.name}</b>
-                <span>Recall</span>
-              </button>
-            ))}
-            <button
-              className="chip"
-              disabled={locked || !project.playlist.ids.length}
-              onClick={() => run(() => api.settings({ playlist: { running: !project.playlist.running } }))}
-            >
-              <b>{project.playlist.running ? "Stop playlist" : "Play playlist"}</b>
-              <span>{project.playlist.ids.length} looks · {project.playlist.intervalSec}s</span>
-            </button>
-          </div>
-        </div>
-      </footer>
-
-      {modal ? (
-        <div className="modal-back" onClick={() => setModal(false)}>
-          <form
-            className="modal"
-            onClick={(e) => e.stopPropagation()}
-            onSubmit={(e) => {
-              e.preventDefault();
-              run(async () => {
-                const result = await api.addController(form);
-                setSelectedId(result.controller.id);
-                setModal(false);
-                return result;
-              }, "Controller added");
-            }}
-          >
-            <h2>Add controller by IP</h2>
-            <div className="field">
-              <label>Name</label>
-              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Stage left" />
-            </div>
-            <div className="field">
-              <label>IP address</label>
-              <input value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} required />
-            </div>
-            <div className="field">
-              <label>TCP/UDP port</label>
-              <input type="number" value={form.port} onChange={(e) => setForm({ ...form, port: Number(e.target.value) })} />
-            </div>
-            <div className="field">
-              <label>Model</label>
-              <select value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}>
-                {Object.values(project.models || {}).map((model) => (
-                  <option key={model.id} value={model.id}>{model.label}</option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label>Transport</label>
-              <select value={form.transport} onChange={(e) => setForm({ ...form, transport: e.target.value })}>
-                <option value="tcp">TCP 5200</option>
-                <option value="udp">UDP 5201</option>
-              </select>
-            </div>
-            <div className="row">
-              <button className="btn primary" type="submit">Connect</button>
-              <button className="btn" type="button" onClick={() => setModal(false)}>Cancel</button>
-            </div>
-          </form>
-        </div>
-      ) : null}
-
-      {toast ? (
-        <div className="toast" onClick={() => setToast("")}>{toast}</div>
-      ) : null}
-    </div>
-  );
-}
-
-function ShowBar({ project, clock, busy, locked, onRun, onToast }) {
-  function openDisplays() {
-    if (!project.controllers.length) {
-      onToast("Add controllers or start Lab, then open displays");
-      return;
-    }
-    for (const controller of project.controllers) {
-      window.open(`/output/${controller.id}`, `lumen-display-${controller.id}`);
-    }
-    onToast("Drag each display window onto the HDMI screen that feeds that MCTRL4K");
-  }
-
-  return (
-    <div className="showbar">
-      <span className="showbar-label">Show</span>
-      <label className="btn">
-        Load media
-        <input
-          type="file"
-          accept="video/mp4,video/webm,video/quicktime,image/*"
-          hidden
-          disabled={locked}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (file) onRun(() => api.uploadMedia(file), `${file.name} on stage`);
-          }}
-        />
-      </label>
-      <button className="btn primary" disabled={busy || !(project.clips || []).length} onClick={() => onRun(() => api.showPlay(), "Playing all displays")}>
-        Play
-      </button>
-      <button className="btn" disabled={busy} onClick={() => onRun(() => api.showPause())}>Pause</button>
-      <button className="btn" disabled={busy} onClick={() => onRun(() => api.showStop())}>Stop</button>
-      <button className="btn" disabled={busy} onClick={openDisplays}>Open displays</button>
-      <span className="showbar-meta">
-        {(project.media || []).length} media · {(project.clips || []).length} on stage · {clock.playing ? "PLAY" : "STOP"} {Math.floor(clock.mediaTime || 0)}s
-      </span>
-      {(project.media || []).map((item) => (
-        <button key={item.id} className="chip ghost-chip" disabled={locked} onClick={() => onRun(() => api.removeMedia(item.id), "Media removed")}>
-          {item.name} ×
-        </button>
-      ))}
-      <span className="showbar-hint">Watchout-style: this PC plays the file. Drag display windows to the screens cabled into each controller.</span>
-    </div>
-  );
-}
-
-function Inspector({
-  tab, setTab, project, selected, layer, busy, locked,
-  onCommand, onProbe, onRemove, onPatch, onPatchLayer, onSettings, onDeleteLayer, onImport, onPreviewBrightness, onRoute,
-}) {
-  return (
-    <aside className="inspector">
-      <div className="tabs">
-        {["sender", "layer", "matrix", "screen"].map((id) => (
-          <button key={id} className={`tab ${tab === id ? "on" : ""}`} onClick={() => setTab(id)}>
-            {id}
-          </button>
-        ))}
-      </div>
-      {tab === "sender" ? (
-        <SenderPane
-          project={project}
-          selected={selected}
-          busy={busy}
-          locked={locked}
-          onCommand={onCommand}
-          onProbe={onProbe}
-          onRemove={onRemove}
-          onPatch={onPatch}
-          onPreviewBrightness={onPreviewBrightness}
-        />
-      ) : null}
-      {tab === "layer" ? (
-        <LayerPane project={project} layer={layer} locked={locked} onPatchLayer={onPatchLayer} onDeleteLayer={onDeleteLayer} />
-      ) : null}
-      {tab === "matrix" ? (
-        <MatrixPane project={project} locked={locked} onRoute={onRoute} />
-      ) : null}
-      {tab === "screen" ? (
-        <ScreenPane project={project} locked={locked} onSettings={onSettings} onImport={onImport} />
-      ) : null}
-    </aside>
-  );
-}
-
-function SenderPane({ project, selected, busy, locked, onCommand, onProbe, onRemove, onPatch, onPreviewBrightness }) {
-  if (!selected) {
-    return <p className="note">Select a sender. IP control covers brightness, freeze, FTB, input, presets, and tiling — not H9 FPGA splicing.</p>;
-  }
-  const warning = capacityWarning(selected, project.models);
-  const spec = project.models?.[selected.model];
-  const ports = spec?.ethernetPorts || 16;
-  return (
-    <>
-      <div className="section-h">{selected.name}</div>
-      <div className="field">
-        <label>Status</label>
-        <div>
-          <span className={`led ${selected.online ? "on" : "off"}`} />
-          {selected.online ? "Online" : "Offline"} {selected.simulated ? "· simulator" : ""}
-        </div>
-      </div>
-      <div className="field">
-        <label>Brightness</label>
-        <input
-          type="range"
-          min="0"
-          max="100"
-          disabled={locked}
-          value={Math.round((selected.brightness / 255) * 100)}
-          onChange={(e) => onPreviewBrightness(Number(e.target.value))}
-          onMouseUp={(e) => onCommand("brightness", { value: Number(e.target.value) })}
-        />
-      </div>
-      <div className="field">
-        <label>Input</label>
-        <select disabled={locked} value={selected.inputKey} onChange={(e) => onCommand("input", { inputKey: e.target.value })}>
-          {(project.sources || []).map((source) => (
-            <option key={source.key} value={source.key}>{source.label}</option>
-          ))}
-        </select>
-      </div>
-      <div className="row">
-        <button className="btn" disabled={busy || locked} onClick={() => onCommand("normal")}>Live</button>
-        <button className="btn" disabled={busy || locked} onClick={() => onCommand("freeze")}>Freeze</button>
-        <button className="btn danger" disabled={busy || locked} onClick={() => onCommand("blackout")}>Black</button>
-      </div>
-      <div className="field">
-        <label>Hardware preset</label>
-        <div className="preset-grid">
-          {Array.from({ length: 8 }, (_, i) => i + 1).map((n) => (
-            <button
-              key={n}
-              className={`btn ${selected.hardwarePreset === n ? "primary" : ""}`}
-              disabled={busy || locked}
-              onClick={() => onCommand("hardwarePreset", { index: n })}
-            >
-              P{n}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="row">
-        <button className="btn" disabled={busy || locked} onClick={() => onCommand("lowLatency", { on: !selected.lowLatency })}>
-          Low latency {selected.lowLatency ? "on" : "off"}
-        </button>
-        <button className="btn" disabled={busy || locked} onClick={() => onCommand("mode3d", { on: !selected.mode3d })}>
-          3D {selected.mode3d ? "on" : "off"}
-        </button>
-        <button className="btn" disabled={busy || locked} onClick={() => onCommand("testPattern", { on: !selected.testPattern })}>
-          Test {selected.testPattern ? "on" : "off"}
-        </button>
-      </div>
-      <div className="field">
-        <label>EDID / viewport</label>
-        <div className="edid-row">
-          <input
-            type="number"
-            disabled={locked}
-            defaultValue={selected.edid?.width || selected.viewport.width}
-            key={`${selected.id}-w-${selected.edid?.width || selected.viewport.width}`}
-            onBlur={(e) => onPatch({ edid: { width: Number(e.target.value), height: selected.edid?.height || selected.viewport.height, refresh: 60 } })}
-          />
-          ×
-          <input
-            type="number"
-            disabled={locked}
-            defaultValue={selected.edid?.height || selected.viewport.height}
-            key={`${selected.id}-h-${selected.edid?.height || selected.viewport.height}`}
-            onBlur={(e) => onPatch({ edid: { width: selected.edid?.width || selected.viewport.width, height: Number(e.target.value), refresh: 60 } })}
-          />
-        </div>
-      </div>
-      <div className="field">
-        <label>Backup sender</label>
-        <select
-          disabled={locked}
-          value={selected.backupId || ""}
-          onChange={(e) => onPatch({ backupId: e.target.value || null })}
-        >
-          <option value="">None</option>
-          {project.controllers.filter((c) => c.id !== selected.id).map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
-      </div>
-      <div className="field">
-        <label>Ethernet ports</label>
-        <div className="ports">
-          {Array.from({ length: ports }, (_, i) => (
-            <span key={i} className={`port ${i < (selected.portsUp || ports) ? "up" : ""}`} title={`Port ${i + 1}`} />
-          ))}
-        </div>
-      </div>
-      {warning ? <div className="warn-box">{warning}</div> : null}
-      <div className="row">
-        <button className="btn" onClick={onProbe}>Probe IP</button>
-        <button className="btn danger" disabled={locked} onClick={onRemove}>Remove</button>
-      </div>
-    </>
-  );
-}
-
-function LayerPane({ project, layer, locked, onPatchLayer, onDeleteLayer }) {
-  if (!layer) {
-    return (
-      <p className="note">
-        Click a layer chip at the bottom, then use <b>Delete layer</b> next to Add layer,
-        or the red Delete on that chip. If Lock is on in the top bar, removal is blocked.
-      </p>
-    );
-  }
-  return (
-    <>
-      <div className="section-h">{layer.name}</div>
-      <div className="field">
-        <label>Name</label>
-        <input disabled={locked} defaultValue={layer.name} key={layer.id + layer.name} onBlur={(e) => onPatchLayer({ name: e.target.value })} />
-      </div>
-      <div className="field">
-        <label>Source</label>
-        <select disabled={locked} value={layer.source} onChange={(e) => onPatchLayer({ source: e.target.value })}>
-          {(project.sources || []).map((source) => (
-            <option key={source.key} value={source.key}>{source.label}</option>
-          ))}
-        </select>
-      </div>
-      <div className="field">
-        <label>Kind</label>
-        <select disabled={locked} value={layer.kind || "video"} onChange={(e) => onPatchLayer({ kind: e.target.value })}>
-          <option value="video">Video layer</option>
-          <option value="bkg">BKG (does not steal z-order)</option>
-          <option value="osd">OSD</option>
-        </select>
-      </div>
-      <div className="row">
-        <button className="btn" disabled={locked} onClick={() => onPatchLayer({ visible: layer.visible === false })}>
-          {layer.visible === false ? "Show" : "Hide"}
-        </button>
-        <button className="btn" disabled={locked} onClick={() => onPatchLayer({ locked: !layer.locked })}>
-          {layer.locked ? "Unlock layer" : "Lock layer"}
-        </button>
-        <button className="btn danger" disabled={locked} onClick={onDeleteLayer}>
-          Delete
-        </button>
-      </div>
-      <p className="note">
-        {layer.width}×{layer.height} at {layer.x},{layer.y} · z {layer.z}.
-        Use × on the layer chip below, or Delete here. Screen Lock blocks removal.
-      </p>
-    </>
-  );
-}
-
-function MatrixPane({ project, locked, onRoute }) {
-  const sources = project.sources || [];
-  return (
-    <>
-      <div className="section-h">Input matrix</div>
-      <p className="note">Click a cell to route that source to a sender. This is IP switching, not an H9 crosspoint card.</p>
-      <div className="matrix">
-        <div className="matrix-row head">
-          <span />
-          {sources.map((source) => <span key={source.key}>{source.label}</span>)}
-        </div>
-        {project.controllers.map((controller) => (
-          <div className="matrix-row" key={controller.id}>
-            <span>{controller.name}</span>
-            {sources.map((source) => (
               <button
-                key={source.key}
-                disabled={locked}
-                className={controller.inputKey === source.key ? "on" : ""}
-                onClick={() => onRoute(controller.id, source.key)}
-              />
-            ))}
-          </div>
-        ))}
+                disabled={busy}
+                onClick={() => run("Probe", () => api.probe(selectedDisplay.id))}
+              >
+                Probe IP
+              </button>
+              <button
+                className="danger"
+                disabled={busy}
+                onClick={() =>
+                  run("Remove display", async () => {
+                    await api.removeController(selectedDisplay.id);
+                    setSelectedDisplayId(null);
+                  })
+                }
+              >
+                Remove display
+              </button>
+            </>
+          ) : (
+            <>
+              <h2>Displays</h2>
+              <p className="hint">
+                Each display is one MCTRL (or similar). Add by IP, then place its frame on the
+                stage.
+              </p>
+              <div className="row">
+                <input value={ip} onChange={(event) => setIp(event.target.value)} placeholder="IP" />
+                <button
+                  disabled={busy}
+                  onClick={() => run("Add display", () => api.addController({ host: ip }))}
+                >
+                  Add
+                </button>
+              </div>
+              <div className="row">
+                <button disabled={busy} onClick={() => run("Lab 4", () => api.startLab(4))}>
+                  Lab 4
+                </button>
+                <button disabled={busy} onClick={() => run("Lab 6", () => api.startLab(6))}>
+                  Lab 6
+                </button>
+                <button disabled={busy} onClick={() => run("Stop lab", () => api.stopLab())}>
+                  Stop lab
+                </button>
+              </div>
+              <ul className="display-list">
+                {controllers.map((controller) => (
+                  <li key={controller.id}>
+                    <button type="button" onClick={() => setSelectedDisplayId(controller.id)}>
+                      <b>{controller.name}</b>
+                      <small>
+                        {controller.host}:{controller.port} · {controller.viewport.width}×
+                        {controller.viewport.height}
+                      </small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {controllers.length === 0 ? (
+                <p className="empty">No displays. Start Lab 4 or add a sender by IP.</p>
+              ) : null}
+            </>
+          )}
+        </aside>
       </div>
-    </>
-  );
-}
 
-function ScreenPane({ project, locked, onSettings, onImport }) {
-  const color = project.color || {};
-  const osd = project.osd || {};
-  return (
-    <>
-      <div className="section-h">Screen</div>
-      <div className="row">
-        <button className="btn" disabled={locked} onClick={() => onSettings({ eyeSaver: !project.eyeSaver })}>
-          Eye saver {project.eyeSaver ? "on" : "off"}
-        </button>
-        <button className="btn" disabled={locked} onClick={() => onSettings({ osd: { enabled: !osd.enabled } })}>
-          OSD {osd.enabled ? "on" : "off"}
-        </button>
-      </div>
-      <div className="field">
-        <label>OSD text</label>
-        <input disabled={locked} defaultValue={osd.text} key={osd.text} onBlur={(e) => onSettings({ osd: { text: e.target.value, enabled: true } })} />
-      </div>
-      <div className="field">
-        <label>Contrast {color.contrast}</label>
-        <input type="range" min="50" max="150" disabled={locked} defaultValue={color.contrast} key={`c${color.contrast}`} onMouseUp={(e) => onSettings({ color: { contrast: Number(e.target.value) } })} />
-      </div>
-      <div className="field">
-        <label>Saturation {color.saturation}</label>
-        <input type="range" min="0" max="200" disabled={locked} defaultValue={color.saturation} key={`s${color.saturation}`} onMouseUp={(e) => onSettings({ color: { saturation: Number(e.target.value) } })} />
-      </div>
-      <div className="field">
-        <label>Hue {color.hue}</label>
-        <input type="range" min="-180" max="180" disabled={locked} defaultValue={color.hue} key={`h${color.hue}`} onMouseUp={(e) => onSettings({ color: { hue: Number(e.target.value) } })} />
-      </div>
-      <div className="row">
-        <a className="btn" href="/api/project/export">Export</a>
-        <label className="btn">
-          Import
-          <input type="file" accept="application/json" hidden onChange={(e) => e.target.files[0] && onImport(e.target.files[0])} />
-        </label>
-      </div>
-      <p className="note">
-        Color and OSD preview on this desk. LED cabinets only receive brightness / freeze / blackout / input over the published IP protocol. HDMI ingest, HDR, Genlock, and sending-card Ethernet cannot be added in software.
-      </p>
-    </>
-  );
-}
-
-}
-
-function StageVideo({ src, style, clock }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const video = ref.current;
-    if (!video) return;
-    const t = clock?.mediaTime || 0;
-    if (Number.isFinite(video.duration) && video.duration > 0) {
-      const target = clock?.loop ? t % video.duration : Math.min(t, video.duration);
-      if (Math.abs(video.currentTime - target) > 0.35) video.currentTime = target;
-    }
-    if (clock?.playing) video.play().catch(() => {});
-    else video.pause();
-  }, [clock]);
-  return <video ref={ref} className="stage-clip" style={style} src={src} muted playsInline loop={clock?.loop} />;
-}
-
-function CanvasBoard({
-  project, selectedId, selectedLayer, onSelect, onSelectLayer,
-  onMove, onMoveEnd, onMoveLayer, onMoveLayerEnd, clock,
-}) {
-  const ref = useRef(null);
-  const drag = useRef(null);
-  const [size, setSize] = useState({ w: 800, h: 400 });
-
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) return undefined;
-    const observe = () => setSize({ w: node.clientWidth, h: node.clientHeight });
-    observe();
-    const ro = new ResizeObserver(observe);
-    ro.observe(node);
-    return () => ro.disconnect();
-  }, []);
-
-  const scale = useMemo(() => {
-    const sx = size.w / project.canvas.width;
-    const sy = size.h / project.canvas.height;
-    return Math.min(sx, sy);
-  }, [size, project.canvas.width, project.canvas.height]);
-
-  const offset = {
-    x: (size.w - project.canvas.width * scale) / 2,
-    y: (size.h - project.canvas.height * scale) / 2,
-  };
-
-  const filter = [
-    `contrast(${project.color?.contrast || 100}%)`,
-    `saturate(${project.color?.saturation || 100}%)`,
-    `hue-rotate(${project.color?.hue || 0}deg)`,
-    project.eyeSaver ? "sepia(0.18) brightness(0.96)" : "",
-  ].join(" ");
-
-  function toCanvas(event) {
-    const box = ref.current.getBoundingClientRect();
-    return {
-      x: (event.clientX - box.left - offset.x) / scale,
-      y: (event.clientY - box.top - offset.y) / scale,
-    };
-  }
-
-  function onPointerDown(event, target, kind, mode) {
-    event.stopPropagation();
-    if (kind === "layer") onSelectLayer(target.id);
-    else onSelect(target.id);
-    if (target.locked) return;
-    const start = toCanvas(event);
-    drag.current = {
-      id: target.id,
-      kind,
-      mode,
-      start,
-      origin: kind === "layer"
-        ? { x: target.x, y: target.y, width: target.width, height: target.height }
-        : { ...target.viewport },
-    };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  }
-
-  function onPointerMove(event) {
-    if (!drag.current) return;
-    const now = toCanvas(event);
-    const dx = now.x - drag.current.start.x;
-    const dy = now.y - drag.current.start.y;
-    const origin = drag.current.origin;
-    const box = drag.current.mode === "resize"
-      ? { ...origin, width: Math.max(320, Math.round(origin.width + dx)), height: Math.max(180, Math.round(origin.height + dy)) }
-      : { ...origin, x: Math.round(origin.x + dx), y: Math.round(origin.y + dy) };
-    if (drag.current.kind === "layer") onMoveLayer(drag.current.id, box);
-    else onMove(drag.current.id, box);
-  }
-
-  function onPointerUp() {
-    if (!drag.current) return;
-    if (drag.current.kind === "layer") {
-      const item = project.layers.find((layer) => layer.id === drag.current.id);
-      if (item) onMoveLayerEnd(item.id, { x: item.x, y: item.y, width: item.width, height: item.height });
-    } else {
-      const controller = project.controllers.find((c) => c.id === drag.current.id);
-      if (controller) onMoveEnd(controller.id, controller.viewport);
-    }
-    drag.current = null;
-  }
-
-  return (
-    <section className="stage-wrap">
-      <div className="stage-toolbar">
-        <span className="btn ghost">Canvas {project.canvas.width}×{project.canvas.height}</span>
-      </div>
-      <div className="hint">Take applies layers · drag senders or layers · FTB / freeze / lock on the top bar</div>
-      <div
-        className="canvas"
-        ref={ref}
-        style={{ filter }}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
-      >
-        {(project.clips || []).map((clip) => {
-          const media = (project.media || []).find((item) => item.id === clip.mediaId);
-          if (!media) return null;
-          const style = {
-            left: offset.x + clip.x * scale,
-            top: offset.y + clip.y * scale,
-            width: clip.width * scale,
-            height: clip.height * scale,
-            zIndex: 1,
-            pointerEvents: "none",
-          };
-          if (media.kind === "image") {
-            return <img key={clip.id} alt="" src={media.url} className="stage-clip" style={style} />;
-          }
-          return <StageVideo key={clip.id} src={media.url} style={style} clock={clock} />;
-        })}
-        {project.layers.filter((layer) => layer.visible !== false).map((layer) => (
-          <div
-            key={layer.id}
-            className={`layer-box ${selectedLayer === layer.id ? "selected" : ""} ${layer.kind || ""}`}
-            style={{
-              left: offset.x + layer.x * scale,
-              top: offset.y + layer.y * scale,
-              width: layer.width * scale,
-              height: layer.height * scale,
-              zIndex: selectedLayer === layer.id ? 8 : 2,
-              pointerEvents: "auto",
-              opacity: (layer.opacity || 100) / 100,
-            }}
-            onPointerDown={(event) => onPointerDown(event, layer, "layer", "move")}
-          >
-            <span>{layer.name} · {layer.source}</span>
-            <div className="handle" onPointerDown={(event) => onPointerDown(event, layer, "layer", "resize")} />
-          </div>
-        ))}
-        {project.controllers.map((controller) => (
-          <div
-            key={controller.id}
-            className={`tile ${selectedId === controller.id ? "selected" : ""} ${controller.testPattern ? "bars" : ""}`}
-            style={{
-              left: offset.x + controller.viewport.x * scale,
-              top: offset.y + controller.viewport.y * scale,
-              width: controller.viewport.width * scale,
-              height: controller.viewport.height * scale,
-            }}
-            onPointerDown={(event) => onPointerDown(event, controller, "controller", "move")}
-          >
-            <div className="tile-label">
-              <strong>{controller.name}</strong>
-              <span>{displayLabel(controller)}</span>
-            </div>
-            <div className="tile-body">
-              {controller.host}
-              <br />
-              {controller.viewport.width}×{controller.viewport.height}
-              <br />
-              {controller.inputKey} · {Math.round((controller.brightness / 255) * 100)}%
-            </div>
-            <div className="handle" onPointerDown={(event) => onPointerDown(event, controller, "controller", "resize")} />
-          </div>
-        ))}
-        {project.osd?.enabled ? (
-          <div className={`osd-banner ${project.osd.position || "top"}`}>{project.osd.text}</div>
-        ) : null}
-        {project.ftb?.active ? <div className="ftb-veil" /> : null}
-      </div>
-    </section>
+      <footer className="wo-timeline">
+        <div className="wo-tl-head">
+          <strong>Timeline</strong>
+          <span>
+            {formatTime(wrappedHead)} / {formatTime(timelineDuration)}
+          </span>
+        </div>
+        <div
+          className="wo-ruler"
+          ref={timelineRef}
+          onClick={seekFromTimeline}
+          role="slider"
+          aria-valuenow={wrappedHead}
+          aria-valuemin={0}
+          aria-valuemax={timelineDuration}
+        >
+          <div className="wo-playhead" style={{ left: `${playheadPct}%` }} />
+          {clips.map((clip) => {
+            const start = clip.start || 0;
+            const dur = clip.duration || 10;
+            return (
+              <button
+                key={clip.id}
+                type="button"
+                className={`wo-tl-clip ${selectedClipId === clip.id ? "sel" : ""}`}
+                style={{
+                  left: `${(start / timelineDuration) * 100}%`,
+                  width: `${Math.max(2, (dur / timelineDuration) * 100)}%`,
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setSelectedClipId(clip.id);
+                  setSelectedDisplayId(null);
+                }}
+              >
+                {clip.name}
+              </button>
+            );
+          })}
+        </div>
+        <p className="wo-foot-note">
+          Watchout-inspired production: media on a stage, display windows crop their viewports,
+          Play runs the show. This is not Dataton Watchout. Video still leaves this computer over
+          HDMI/DP into each sender — Lumen Splice cannot stream pixels to an MCTRL over Ethernet.
+        </p>
+      </footer>
+    </div>
   );
 }

@@ -20,6 +20,7 @@ import {
 import { createSimulator } from "../server/simulator.js";
 import { sendTcp } from "../server/transport.js";
 import { createStore } from "../server/store.js";
+import { createShow } from "../server/show.js";
 
 function hex(buf) {
   return toHex(buf);
@@ -181,11 +182,15 @@ describe("project store", () => {
     assert.equal(store.project.sources.length, 4);
   });
 
-  it("places uploaded media as a full-stage clip", () => {
+  it("adds a stage cue from the media bin without filling the whole canvas", () => {
     const store = createStore();
     const media = store.addMedia({ name: "loop.mp4", kind: "video", filename: "loop.mp4" });
+    assert.equal(store.project.clips.length, 0);
     const clip = store.addClip({ mediaId: media.id });
-    assert.equal(clip.width, store.project.canvas.width);
+    assert.equal(clip.width, 1920);
+    assert.equal(clip.height, 1080);
+    assert.equal(clip.start, 0);
+    assert.equal(clip.duration, 10);
     assert.equal(store.project.clips.length, 1);
     store.removeMedia(media.id);
     assert.equal(store.project.clips.length, 0);
@@ -208,6 +213,24 @@ describe("layer take routing", () => {
     const routes = takeMap(project);
     assert.equal(routes.find((r) => r.controllerId === "a").inputKey, "DP");
     assert.equal(routes.find((r) => r.controllerId === "b").inputKey, "DVI1");
+  });
+});
+
+describe("show clock", () => {
+  it("plays, seeks, and stops from a shared playhead", () => {
+    const show = createShow();
+    assert.equal(show.snapshot().playing, false);
+    assert.equal(show.snapshot().mediaTime, 0);
+    show.seek(12.5);
+    assert.equal(show.snapshot().mediaTime, 12.5);
+    show.play();
+    assert.equal(show.snapshot().playing, true);
+    show.pause();
+    assert.equal(show.snapshot().playing, false);
+    assert.ok(show.snapshot().mediaTime >= 12.5);
+    show.stop();
+    assert.equal(show.snapshot().playing, false);
+    assert.equal(show.snapshot().mediaTime, 0);
   });
 });
 

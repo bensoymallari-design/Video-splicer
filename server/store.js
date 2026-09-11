@@ -276,11 +276,13 @@ export function createStore() {
       id: randomUUID(),
       mediaId: media.id,
       name: input.name || media.name,
-      x: input.x ?? 0,
-      y: input.y ?? 0,
-      width: input.width ?? project.canvas.width,
-      height: input.height ?? project.canvas.height,
+      x: input.x ?? (project.clips.length % 4) * 120,
+      y: input.y ?? Math.floor(project.clips.length / 4) * 80,
+      width: input.width ?? 1920,
+      height: input.height ?? 1080,
       z: project.clips.length + 1,
+      start: Number(input.start) || 0,
+      duration: Number(input.duration) || 10,
     };
     project.clips.push(clip);
     return clip;
