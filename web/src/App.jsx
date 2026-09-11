@@ -151,7 +151,7 @@ export default function App() {
           <button className="btn primary" disabled={busy || locked} onClick={() => run(() => api.take(), "Take sent to senders")}>
             Take
           </button>
-          <button className="btn" disabled={busy || locked} onClick={() => run(() => api.group({ command: { type: "normal" } }), "Live")}>
+          <button className="btn" disabled={busy || locked} onClick={() => run(() => api.ftb({ active: false }), "Live")}>
             Live
           </button>
           <button className="btn" disabled={busy || locked} onClick={() => run(() => api.group({ command: { type: "freeze" } }))}>
