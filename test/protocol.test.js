@@ -180,6 +180,16 @@ describe("project store", () => {
     assert.equal(store.project.color.contrast, 100);
     assert.equal(store.project.sources.length, 4);
   });
+
+  it("places uploaded media as a full-stage clip", () => {
+    const store = createStore();
+    const media = store.addMedia({ name: "loop.mp4", kind: "video", filename: "loop.mp4" });
+    const clip = store.addClip({ mediaId: media.id });
+    assert.equal(clip.width, store.project.canvas.width);
+    assert.equal(store.project.clips.length, 1);
+    store.removeMedia(media.id);
+    assert.equal(store.project.clips.length, 0);
+  });
 });
 
 describe("layer take routing", () => {

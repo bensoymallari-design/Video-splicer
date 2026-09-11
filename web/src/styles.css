@@ -36,7 +36,7 @@ button, input, select {
 .app {
   height: 100%;
   display: grid;
-  grid-template-rows: 64px minmax(0, 1fr) 200px;
+  grid-template-rows: 64px 52px minmax(0, 1fr) 200px;
   min-width: 0;
   overflow: hidden;
 }
@@ -99,6 +99,55 @@ button, input, select {
 .actions {
   display: flex;
   gap: 8px;
+}
+
+.showbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: #10161e;
+  overflow: auto;
+  white-space: nowrap;
+}
+.showbar-label {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--amber-2);
+}
+.showbar-meta, .showbar-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+.showbar-hint { margin-left: auto; }
+.ghost-chip { padding: 6px 8px; font-size: 11px; min-width: 0; }
+.stage-clip {
+  position: absolute;
+  object-fit: cover;
+}
+
+.output-root {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  overflow: hidden;
+  cursor: none;
+}
+.output-stage { position: absolute; }
+.output-clip {
+  position: absolute;
+  object-fit: cover;
+}
+.output-tag {
+  position: fixed;
+  left: 8px;
+  bottom: 8px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.45);
+  z-index: 5;
+  cursor: default;
 }
 .btn {
   border: 1px solid var(--line-2);
